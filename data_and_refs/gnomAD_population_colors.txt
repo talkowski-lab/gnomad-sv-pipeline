@@ -1,0 +1,6 @@
+pop	color	name
+AFR	#941594	"African/African-American"
+AMR	#EE1D24	Latino
+EAS	#108C43	"East Asian"
+EUR	#69A5CC	European
+OTH	#ABB9B9	"Other/Unk."
