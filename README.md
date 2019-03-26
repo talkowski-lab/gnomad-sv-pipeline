@@ -1,5 +1,8 @@
 # gnomAD-SV codebase
 
+Copyright (c) 2019, [Ryan L. Collins](mailto:rlcollins@g.harvard.edu) and the Talkowski Laboratory.  
+Distributed under terms of the [MIT License](/LICENSE) (see `LICENSE`).  
+
 This repository contains custom code and scripts developed as described in the gnomAD-SV preprint, [Collins\*, Brand\*, et al., bioRxiv (2019)](https://broad.io/gnomad_sv).  
 
 For more information, please refer to [this blog post](https://macarthurlab.org/2019/03/20/structural-variants-in-gnomad/).  
