@@ -1,7 +1,5 @@
 # gnomAD-SV codebase
 
-***Please note that this repository is currently being updated, and some code is missing***
-
 This repository contains custom code and scripts developed as described in the gnomAD-SV preprint, [Collins\*, Brand\*, et al., bioRxiv (2019)](https://broad.io/gnomad_sv).  
 
 For more information, please refer to [this blog post](https://broad.io/gnomad_sv).  
@@ -14,14 +12,6 @@ The contents of this codebase are subdivided into several sections, for clarity.
 
 These sections are subdivided as follows:
 
-### SV pipeline scripts
-
-**Directory:** `gnomad_sv_pipeline_scripts`  
-
-This subdirectory contains the individual scripts and custom code to generate SV callsets using the gnomAD-SV pipeline.  
-
-By and large, these scripts need not be called individually; they have all been placed in the appropriate order and with the correct arguments & options within their corresponding WDLs (see below).
-
 ### SV pipeline WDLs
 
 **Directory:** `gnomad_sv_pipeline_wdls`  
@@ -29,6 +19,8 @@ By and large, these scripts need not be called individually; they have all been 
 This subdirectory contains the WDLs used to generate SV callsets using the gnomAD-SV pipeline.  
 
 If you are unfamiliar with WDL, please see the `Dependencies` section below for more information.  
+
+Each task within each WDL specifies a publicly readable Docker image; these Docker images contain the scripts required to run each task. These scripts need not be called individually; they have all been placed in the appropriate order and with the correct arguments & options within their corresponding WDLs.  
 
 ### gnomAD-SV analysis scripts
 
@@ -40,7 +32,7 @@ This subdirectory contains the individual scripts and custom code used to filter
 
 **Directory:** `gnomad_sv_analysis_wdls`  
 
-This subdirectory contains the WDLs used to filter, perform quality-control on, and analyze the gnomAD-SV callset on FireCloud.
+This subdirectory contains the WDLs used to filter, perform quality-control on, and analyze the gnomAD-SV callset on FireCloud.  
 
 ### gnomAD-SV manuscript code
 
