@@ -2,7 +2,7 @@
 
 This repository contains custom code and scripts developed as described in the gnomAD-SV preprint, [Collins\*, Brand\*, et al., bioRxiv (2019)](https://broad.io/gnomad_sv).  
 
-For more information, please refer to [this blog post](https://broad.io/gnomad_sv).  
+For more information, please refer to [this blog post](https://macarthurlab.org/2019/03/20/structural-variants-in-gnomad/).  
 
 ---
 
@@ -85,10 +85,7 @@ All code in this repository is released under the MIT license (see `LICENSE`).
 If you reuse the code hosted in this repo, or the SV data hosted on the gnomAD Browser, please cite [the gnomAD-SV preprint](https://broad.io/gnomad_sv).
 
 ### Citation
-[**An open resource of structural variation for medical and population genetics.**](https://broad.io/gnomad_sv) Ryan L. Collins, Harrison Brand, Konrad J. Karczewski, Xuefang Zhao, Jessica Alföldi, Amit V. Khera, Laurent C. Francioli, Laura D. Gauthier, Harold Wang, Nicholas A. Watts, Matthew Solomonson, Anne O’Donnell-Luria, Alexander Baumann, Ruchi Munshi, Chelsea Lowther, Mark Walker, Christopher Whelan, Yongqing Huang, Ted Brookings, Ted Sharpe, Matthew R. Stone, Elise Valkanas, Jack Fu, Grace Tiao, Kristen M. Laricchia, Christine Stevens, Namrata Gupta, Lauren Margolin, The Genome Aggregation Database (gnomAD) Production Team, The gnomAD Consortium, John A. Spertus, Kent D. Taylor, Henry J. Lin, Stephen S. Rich, Wendy Post, Yii,Der Ida Chen, Jerome I. Rotter, Chad Nusbaum,†, Anthony Philippakis, Eric Lander, Stacey Gabriel, Benjamin M. Neale, Sekar Kathiresan, Mark J. Daly, Eric Banks, Daniel G. MacArthur, Michael E. Talkowski. _bioRxiv_ (2019).
+[**An open resource of structural variation for medical and population genetics.**](https://broad.io/gnomad_sv) Ryan L. Collins, Harrison Brand, Konrad J. Karczewski, Xuefang Zhao, Jessica Alföldi, Amit V. Khera, Laurent C. Francioli, Laura D. Gauthier, Harold Wang, Nicholas A. Watts, Matthew Solomonson, Anne O’Donnell-Luria, Alexander Baumann, Ruchi Munshi, Chelsea Lowther, Mark Walker, Christopher Whelan, Yongqing Huang, Ted Brookings, Ted Sharpe, Matthew R. Stone, Elise Valkanas, Jack Fu, Grace Tiao, Kristen M. Laricchia, Christine Stevens, Namrata Gupta, Lauren Margolin, The Genome Aggregation Database (gnomAD) Production Team, The gnomAD Consortium, John A. Spertus, Kent D. Taylor, Henry J. Lin, Stephen S. Rich, Wendy Post, Yii,Der Ida Chen, Jerome I. Rotter, Chad Nusbaum, Anthony Philippakis, Eric Lander, Stacey Gabriel, Benjamin M. Neale, Sekar Kathiresan, Mark J. Daly, Eric Banks, Daniel G. MacArthur, Michael E. Talkowski. _bioRxiv_ (2019).
 
 ### Credits
 Acknowledgements & credits for all members of the gnomAD consoritum and gnomAD production, analysis, and SV teams are [listed on the gnomAD website](https://gnomad.broadinstitute.org/about).   
-
-### Contact
-If you have questions about the code hosted in this repo, please [email Ryan Collins](mailto:rlcollins@g.harvard.edu) or file an issue on GitHub.
