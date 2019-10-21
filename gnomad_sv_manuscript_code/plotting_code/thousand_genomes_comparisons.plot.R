@@ -292,11 +292,11 @@ svtypes.file <- opts$svtypes
 pops.file <- opts$populations
 
 # #Dev parameters (local)
-# ALL.in <- "~/scratch/1kg_overlaps/1kG_ALL_comparisons.list"
-# AFR.in <- "~/scratch/1kg_overlaps/1kG_AFR_comparisons.list"
-# EAS.in <- "~/scratch/1kg_overlaps/1kG_EAS_comparisons.list"
-# EUR.in <- "~/scratch/1kg_overlaps/1kG_EUR_comparisons.list"
-# AMR.in <- "~/scratch/1kg_overlaps/1kG_AMR_comparisons.list"
+# ALL.in <- "~/scratch/1000G_comp/1kG_ALL_comparisons.list"
+# AFR.in <- "~/scratch/1000G_comp/1kG_AFR_comparisons.list"
+# EAS.in <- "~/scratch/1000G_comp/1kG_EAS_comparisons.list"
+# EUR.in <- "~/scratch/1000G_comp/1kG_EUR_comparisons.list"
+# AMR.in <- "~/scratch/1000G_comp/1kG_AMR_comparisons.list"
 # svtypes.file <- "~/Desktop/Collins/Talkowski/code/sv-pipeline/ref/vcf_qc_refs/SV_colors.txt"
 # OUTDIR <- "~/scratch/gnomAD_v2_test_plots/"
 # prefix <- "gnomAD_v2_SV_MASTER"

@@ -77,6 +77,8 @@ task shard_vcf {
   String prefix
 
   command <<<
+    set -eu -o pipefail
+
     tabix -f -p vcf ${vcf}
     /opt/sv-pipeline/04_variant_resolution/scripts/shardVCF_preClustering_part1.sh \
     -D ${dist} \
@@ -93,7 +95,7 @@ task shard_vcf {
   
   runtime {
     preemptible: 1
-    docker: "talkowski/sv-pipeline@sha256:ca76dffed573c9c792b8362e594bae23b830045d7ce8585bc90202bdcfe4e9a4"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     disks: "local-disk 250 SSD"
   }
 }
@@ -114,8 +116,17 @@ task vcfcluster {
   Array[String] svtypes
   
   command <<<
-    #Generate random hash for tag
-    prefix="${prefix}.$( cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1 | tr '[:lower:]' '[:upper:]' )"
+    set -eu -o pipefail
+
+    # Don't generate random characters for vcf name, it produces problems with caching on cromwell
+    # You *could* pass a seed like so:
+    # INPUT_HASH=$(tr -d '/+' < <(openssl enc -a -aes-256-ctr -pass pass:"$SEED" -nosalt </dev/zero 2>/dev/null) | head -c16)
+    # But if you hash filtered input vcf, you accomplish the same goal of avoiding similar-named files in the loop,
+    # without introducing randomness:
+    INPUT_HASH=$(md5sum ${vcf} | awk '{print $1}')
+    # concat prefix and hash to create unique vcf name:
+    VCF_NAME="${prefix}-$INPUT_HASH"
+
     #Prep vcf
     zcat ${vcf} | sed -n '1,1000p' | fgrep "#" > header.vcf
     zcat ${vcf} | fgrep -v "#" | fgrep -wf ${VIDs} | cat header.vcf - | bgzip -c \
@@ -123,7 +134,7 @@ task vcfcluster {
     #Run clustering
     echo "input.vcf.gz" > unclustered_vcfs.list;
     if [ ${do_blacklist} == "YES" ]; then
-      svtk vcfcluster unclustered_vcfs.list ${prefix}.vcf \
+      svtk vcfcluster unclustered_vcfs.list $VCF_NAME.vcf \
         -d ${dist} \
         -f ${frac} \
         -x ${blacklist} \
@@ -135,7 +146,7 @@ task vcfcluster {
         --preserve-genotypes \
         --preserve-header
       else
-        svtk vcfcluster unclustered_vcfs.list ${prefix}.vcf \
+        svtk vcfcluster unclustered_vcfs.list $VCF_NAME.vcf \
         -d ${dist} \
         -f ${frac} \
         -z ${svsize} \
@@ -146,16 +157,18 @@ task vcfcluster {
         --preserve-genotypes \
         --preserve-header
       fi
-    bgzip -f ${prefix}.vcf
+    bgzip -f $VCF_NAME.vcf
   >>>
 
   output {
-    File clustered_vcf = "${prefix}.vcf.gz"
+    # need to use glob since cromwell will not be aware of the value of INPUT hash
+    File clustered_vcf = glob("${prefix}*.vcf.gz")[0]
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:47339fc9bed97946a6c3aa374619b1059ee971ed3728a9d5982b2d7ec82edcf8"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 1
+    maxRetries: 1
     memory: "8 GB"
     disks: "local-disk 20 SSD"
   }
@@ -178,8 +191,9 @@ task concat_vcfs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:b359f2cb0c9d5f5a55eb4c41fd362f4e574bf3f8f0f395a2907837571b367ee0"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 500 SSD"
   }
 }

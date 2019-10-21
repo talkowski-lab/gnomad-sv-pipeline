@@ -1,4 +1,4 @@
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:06_annotate_per_chrom/versions/14/plain-WDL/descriptor" as annotate_by_chrom
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:06_annotate_per_chrom/versions/18/plain-WDL/descriptor" as annotate_by_chrom
 
 # Copyright (c) 2018 Talkowski Lab
 
@@ -88,6 +88,7 @@ task subset_vcf {
   runtime {
     docker: "talkowski/sv-pipeline-remote-pysam@sha256:13da9601b97e08ce2abb1aca494551dc7c09920e46dcca11768cd6aff3db37e5"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 50 SSD"
   }
 }
@@ -109,8 +110,9 @@ task concat_vcfs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:17553d54115b8a5f51dc2691dd891e7b9991bb5b7365105ae478cd4a92938a30"
+    docker: "talkowski/sv-pipeline@sha256:6727434a18800d0453a973ca2386325b6b75330b6d05dd014ddb4bcd91dba31b"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 1000 SSD"
   }
 }

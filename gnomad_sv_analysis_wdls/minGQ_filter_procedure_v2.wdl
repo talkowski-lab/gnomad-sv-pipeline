@@ -15,8 +15,9 @@
 #  variants
 
 
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:master_SV_VCF_QC/versions/73/plain-WDL/descriptor" as QC
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:compute_simple_AFs_singleChrom/versions/4/plain-WDL/descriptor" as calcAF
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:minGQ_roc_opt_subworkflow/versions/1/plain-WDL/descriptor" as roc_opt_sub
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:master_SV_VCF_QC/versions/81/plain-WDL/descriptor" as QC
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:compute_simple_AFs_singleChrom/versions/14/plain-WDL/descriptor" as calcAF
 
 
 workflow minGQ_filter_workflow_v2 {
@@ -40,6 +41,7 @@ workflow minGQ_filter_workflow_v2 {
   Int ROC_minGQ
   Int ROC_maxGQ
   Int ROC_stepGQ
+  Int ROC_shards
   Int min_SV_per_proband_per_condition
   Float max_noCallRate
   Int global_minGQ
@@ -49,8 +51,17 @@ workflow minGQ_filter_workflow_v2 {
   File Werling_2018_tarball
   File PCRPLUS_samples_list
 
-  Array[Array[String]] contigs=read_tsv(contiglist)
+  Array[Array[String]] contigs = read_tsv(contiglist)
 
+
+  # Get list of PCRMINUS samples
+  call get_sample_lists {
+    input:
+      vcf=vcf,
+      vcf_idx=vcf_idx,
+      PCRPLUS_samples_list=PCRPLUS_samples_list,
+      prefix=prefix
+  }
 
   # Shard VCF per-chromosome and add AF annotation
   scatter ( contig in contigs ) {
@@ -69,6 +80,36 @@ workflow minGQ_filter_workflow_v2 {
         prefix="${prefix}.${contig[0]}",
         PCRPLUS_samples_list=PCRPLUS_samples_list
     }
+    # Annotate PCR-specific AFs
+    call calcAF.getAFs_singleChrom as getAFs_byPCR {
+      input:
+        vcf=vcf,
+        vcf_idx=vcf_idx,
+        contig=contig[0],
+        sv_per_shard=1000,
+        prefix=prefix,
+        sample_pop_assignments=get_sample_lists.sample_PCR_labels
+    }
+    # Gather table of AC/AN/AF for PCRPLUS and PCRMINUS samples
+    call get_AF_tables {
+      input:
+        vcf=getAFs_byPCR.vcf_wAFs,
+        vcf_idx=getAFs_byPCR.vcf_wAFs_idx,
+        prefix="${prefix}.${contig[0]}"
+    }
+  }
+
+
+  # Make master table of AC/AN/AF for all variants
+  call combine_roc_opt_results as cat_AF_table_PCRPLUS {
+    input:
+      shards=get_AF_tables.PCRPLUS_AF_table,
+      outfile="${prefix}.PCRPLUS.AF_preMinGQ.txt"
+  }
+  call combine_roc_opt_results as cat_AF_table_PCRMINUS {
+    input:
+      shards=get_AF_tables.PCRMINUS_AF_table,
+      outfile="${prefix}.PCRMINUS.AF_preMinGQ.txt"
   }
 
 
@@ -89,6 +130,11 @@ workflow minGQ_filter_workflow_v2 {
         famfile=fam
     }
   }
+  call gather_trio_dat as gather_trio_dat_PCRPLUS {
+    input:
+      files=collect_trio_SVdat_PCRPLUS.trio_SVdat,
+      prefix="${prefix}.PCRPLUS"
+  }
   ###PCRMINUS
   call split_famfile as split_famfile_PCRMINUS {
     input:
@@ -105,12 +151,18 @@ workflow minGQ_filter_workflow_v2 {
         famfile=fam
     }
   }
+  call gather_trio_dat as gather_trio_dat_PCRMINUS {
+    input:
+      files=collect_trio_SVdat_PCRMINUS.trio_SVdat,
+      prefix="${prefix}.PCRMINUS"
+  }
 
 
   # Get table of all conditions to evaluate
   call enumerate_conditions {
     input:
       prefix=prefix,
+      condition_shards=ROC_shards,
       optimize_minSizes=optimize_minSizes,
       optimize_maxSizes=optimize_maxSizes,
       optimize_minFreqs=optimize_minFreqs,
@@ -123,29 +175,15 @@ workflow minGQ_filter_workflow_v2 {
   }
 
 
-  # Scatter over each condition and send the trio data for ROC optimization
-  Array[Array[String]] conditions = read_tsv(enumerate_conditions.minGQ_conditions_table_noHeader)
-  scatter ( condition in conditions ) {
-    # Subset variants to condition of interest & merge across trios
-    # Also computes median & Q1/Q3 variants per proband
-    # If median > min_SV_per_proband_per_condition, also runs ROC
-    ###PCRPLUS
-    call filter_merge_variants_withROC as ROC_PCRPLUS {
+  # Scatter over each shard of conditions and send the trio data for ROC optimization
+  scatter ( shard in enumerate_conditions.minGQ_conditions_table_noHeader_shards ) {
+    ### PCRPLUS
+    call roc_opt_sub.minGQ_roc_opt_subworkflow as roc_opt_PCRPLUS {
       input:
-        trio_SVdat=collect_trio_SVdat_PCRPLUS.trio_SVdat,
+        trio_tarball=gather_trio_dat_PCRPLUS.tarball,
         prefix="${prefix}.PCRPLUS",
         trios_list=split_famfile_PCRPLUS.cleaned_trios_famfile,
-        condition_id=condition[0],
-        minSVLEN=condition[1],
-        maxSVLEN=condition[2],
-        minAF=condition[3],
-        maxAF=condition[4],
-        includeSVTYPE=condition[5],
-        excludeSVTYPE=condition[6],
-        includeFILTER=condition[7],
-        excludeFILTER=condition[8],
-        includeEV=condition[9],
-        excludeEV=condition[10],
+        conditions_table=shard,
         maxSVperTrio=optimize_maxSVperTrio,
         ROC_maxFDR=ROC_maxFDR_PCRPLUS,
         ROC_minGQ=ROC_minGQ,
@@ -153,23 +191,13 @@ workflow minGQ_filter_workflow_v2 {
         ROC_stepGQ=ROC_stepGQ,
         min_SV_per_proband_per_condition=min_SV_per_proband_per_condition
     }
-    ###PCRMINUS
-    call filter_merge_variants_withROC as ROC_PCRMINUS {
+    ### PCRMINUS
+    call roc_opt_sub.minGQ_roc_opt_subworkflow as roc_opt_PCRMINUS {
       input:
-        trio_SVdat=collect_trio_SVdat_PCRMINUS.trio_SVdat,
+        trio_tarball=gather_trio_dat_PCRMINUS.tarball,
         prefix="${prefix}.PCRMINUS",
         trios_list=split_famfile_PCRMINUS.cleaned_trios_famfile,
-        condition_id=condition[0],
-        minSVLEN=condition[1],
-        maxSVLEN=condition[2],
-        minAF=condition[3],
-        maxAF=condition[4],
-        includeSVTYPE=condition[5],
-        excludeSVTYPE=condition[6],
-        includeFILTER=condition[7],
-        excludeFILTER=condition[8],
-        includeEV=condition[9],
-        excludeEV=condition[10],
+        conditions_table=shard,
         maxSVperTrio=optimize_maxSVperTrio,
         ROC_maxFDR=ROC_maxFDR_PCRMINUS,
         ROC_minGQ=ROC_minGQ,
@@ -182,18 +210,26 @@ workflow minGQ_filter_workflow_v2 {
 
   # Merge ROC results to build minGQ filtering lookup tree
   ###PCRPLUS
-  call combine_roc_opt_results as combine_roc_PCRPLUS {
+  call combine_roc_opt_results as combine_roc_optimal_PCRPLUS {
     input:
-      condition_optimizations=ROC_PCRPLUS.ROC_optimal,
-      condition_distrib_stats=ROC_PCRPLUS.distrib_stats,
-      prefix="${prefix}.PCRPLUS"
+      shards=roc_opt_PCRPLUS.ROC_optimal_merged,
+      outfile="${prefix}.PCRPLUS.minGQ_condition_opts.txt"
+  }
+  call combine_roc_opt_results as combine_roc_stats_PCRPLUS {
+    input:
+      shards=roc_opt_PCRPLUS.distrib_stats_merged,
+      outfile="${prefix}.minGQ_condition_distrib_stats.txt"
   }
   ###PCRMINUS
-  call combine_roc_opt_results as combine_roc_PCRMINUS {
+  call combine_roc_opt_results as combine_roc_optimal_PCRMINUS {
     input:
-      condition_optimizations=ROC_PCRMINUS.ROC_optimal,
-      condition_distrib_stats=ROC_PCRMINUS.distrib_stats,
-      prefix="${prefix}.PCRMINUS"
+      shards=roc_opt_PCRMINUS.ROC_optimal_merged,
+      outfile="${prefix}.PCRMINUS.minGQ_condition_opts.txt"
+  }
+  call combine_roc_opt_results as combine_roc_stats_PCRMINUS {
+    input:
+      shards=roc_opt_PCRMINUS.distrib_stats_merged,
+      outfile="${prefix}.minGQ_condition_distrib_stats.txt"
   }
 
 
@@ -202,16 +238,16 @@ workflow minGQ_filter_workflow_v2 {
   call build_filter_tree as build_tree_PCRPLUS {
     input:
       conditions_table=enumerate_conditions.minGQ_conditions_table,
-      condition_optimizations=combine_roc_PCRPLUS.combined_optimizations,
-      condition_distrib_stats=combine_roc_PCRPLUS.combined_distrib_stats,
+      condition_optimizations=combine_roc_optimal_PCRPLUS.merged_file,
+      condition_distrib_stats=combine_roc_stats_PCRPLUS.merged_file,
       prefix="${prefix}.PCRPLUS"
   }
   ###PCRMINUS
   call build_filter_tree as build_tree_PCRMINUS {
     input:
       conditions_table=enumerate_conditions.minGQ_conditions_table,
-      condition_optimizations=combine_roc_PCRMINUS.combined_optimizations,
-      condition_distrib_stats=combine_roc_PCRMINUS.combined_distrib_stats,
+      condition_optimizations=combine_roc_optimal_PCRMINUS.merged_file,
+      condition_distrib_stats=combine_roc_stats_PCRMINUS.merged_file,
       prefix="${prefix}.PCRMINUS"
   }
 
@@ -281,8 +317,43 @@ workflow minGQ_filter_workflow_v2 {
     File filtered_VCF = combine_vcfs.vcf
     File filtered_VCF_idx = combine_vcfs.vcf_idx
     File filtered_VCF_QC_output = filtered_VCF_QC.sv_vcf_qc_output
+    File AF_table_preMinGQ_PCRPLUS = cat_AF_table_PCRPLUS.merged_file
+    File AF_table_preMinGQ_PCRMINUS = cat_AF_table_PCRMINUS.merged_file
     # File minGQ_filter_lookup_table = build_filter_tree.filter_lookup_table
     # File minGQ_ordered_tree_hierarchy = build_filter_tree.ordered_tree_hierarchy
+  }
+}
+
+
+# Get lists of PCRPLUS and PCRMINUS samples present in input VCF
+task get_sample_lists {
+  File vcf
+  File vcf_idx
+  File PCRPLUS_samples_list
+  String prefix
+
+  command <<<
+    set -euo pipefail
+    tabix -H ${vcf} | fgrep -v "##" | cut -f10- | sed 's/\t/\n/g' > all_samples.list
+    fgrep -wf ${PCRPLUS_samples_list} all_samples.list > "${prefix}.PCRPLUS.samples.list" || true
+    fgrep -wvf ${PCRPLUS_samples_list} all_samples.list > "${prefix}.PCRMINUS.samples.list" || true
+    cat \
+      <( awk -v OFS="\t" '{ print $1, "PCRPLUS" }' "${prefix}.PCRPLUS.samples.list" || true ) \
+      <( awk -v OFS="\t" '{ print $1, "PCRMINUS" }' "${prefix}.PCRMINUS.samples.list" || true ) \
+    > "${prefix}.PCR_status_assignments.txt"
+  >>>
+
+  output {
+    File updated_PCRPLUS_samples_list = "${prefix}.PCRPLUS.samples.list"
+    File updated_PCRMINUS_samples_list = "${prefix}.PCRMINUS.samples.list"
+    File sample_PCR_labels = "${prefix}.PCR_status_assignments.txt"
+  }
+
+  runtime {
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
+    disks: "local-disk 50 HDD"
+    preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -294,6 +365,7 @@ task split_PCR_vcf {
   File PCRPLUS_samples_list
 
   command <<<
+    set -euo pipefail
     #Get index of PCR+ samples
     PCRPLUS_idxs=$( zcat ${vcf} | sed -n '1,500p' | fgrep "#" | fgrep -v "##" \
                     | sed 's/\t/\n/g' | awk -v OFS="\t" '{ print NR, $1 }' \
@@ -320,9 +392,38 @@ task split_PCR_vcf {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:7c08627780b347f52ba49220c289a602984090a019107a1cac5a4158623bf462"
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
     disks: "local-disk 50 HDD"
     preemptible: 1
+    maxRetries: 1
+  }
+}
+
+
+# Get a simple table with ID/AC/AN/AF per variant, prior to minGQ
+task get_AF_tables {
+  File vcf
+  File vcf_idx
+  String prefix
+
+  command <<<
+    set -euo pipefail
+    for PCR in PCRPLUS PCRMINUS; do
+      svtk vcf2bed --no-header --no-samples -i "$PCR"_AC -i "$PCR"_AN ${vcf} "$PCR".bed
+      awk -v OFS="\t" '{ print $4, $6, $7 }' "$PCR".bed > ${prefix}."$PCR".AF_preMinGQ.txt
+    done
+  >>>
+
+  output {
+    File PCRPLUS_AF_table = "${prefix}.PCRPLUS.AF_preMinGQ.txt"
+    File PCRMINUS_AF_table = "${prefix}.PCRMINUS.AF_preMinGQ.txt"
+  }
+
+  runtime {
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
+    disks: "local-disk 50 HDD"
+    preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -349,7 +450,7 @@ task split_famfile {
         fgrep -w "$famID" ${famfile}
       fi
     done < ${famfile} \
-      > "${prefix}.cleaned_trios.fam"
+    > "${prefix}.cleaned_trios.fam"
     split -l ${fams_per_shard} --numeric-suffixes=00001 -a 5 ${prefix}.cleaned_trios.fam famfile_shard_
   >>>
 
@@ -359,9 +460,10 @@ task split_famfile {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:7c08627780b347f52ba49220c289a602984090a019107a1cac5a4158623bf462"
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
     disks: "local-disk 30 HDD"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -386,12 +488,43 @@ task collect_trio_SVdat {
           fa_idx=$( awk -v ID=$fa '{ if ($1==ID) print $2 }' vcf_header_columns.txt )
           mo_idx=$( awk -v ID=$mo '{ if ($1==ID) print $2 }' vcf_header_columns.txt )
           if ! [ -z $pro_idx ] && ! [ -z $fa_idx ] && ! [ -z $mo_idx ]; then
-            #Get variant stats
+            #Subset vcf to only 
             zcat "$vcf" | cut -f1-9,"$pro_idx","$fa_idx","$mo_idx" \
-              | fgrep -v "MULTIALLELIC" \
-              | /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/gather_trio_genos.py \
-                --no-header stdin stdout "$pro" "$fa" "$mo" \
-              | awk -v famID="$famID" -v OFS="\t" '{ print famID, $0 }'
+            | grep -e '\#\|[0-1]\/1\|MULTIALLELIC' \
+            | bgzip -c > $famID.vcf.gz
+            #Get list of CNVs in proband that are ≥5kb have ≥50% coverage in either parent
+            svtk vcf2bed -i SVTYPE --no-header $famID.vcf.gz stdout \
+            | awk -v OFS="\t" '{ if ($NF ~ /DEL|DUP|MCNV/) print $1, $2, $3, $4, $NF, $6 }' \
+            > $famID.CNVs.bed
+            fgrep -w $pro $famID.CNVs.bed \
+            | awk -v OFS="\t" '{ if ($3-$2>=5000 && $5!="MCNV") print $1, $2, $3, $4, $5 }' \
+            > $pro.CNVs.gt5kb.bed
+            fgrep -w $fa $famID.CNVs.bed > $fa.CNVs.bed
+            fgrep -w $mo $famID.CNVs.bed > $mo.CNVs.bed
+            #Deletions
+            awk -v OFS="\t" '{ if ($NF=="DEL") print $0, "1" }' $pro.CNVs.gt5kb.bed \
+            | bedtools coverage -a - \
+              -b <( awk '{ if ($5 ~ /DEL|MCNV/) print $0 }' $fa.CNVs.bed ) \
+            | awk -v OFS="\t" '{ if ($NF>=0.5) $NF=1; else $NF=0; print $1, $2, $3, $4, $5, $6, $NF }' \
+            | bedtools coverage -a - \
+              -b <( awk '{ if ($5 ~ /DEL|MCNV/) print $0 }' $mo.CNVs.bed ) \
+            | awk -v OFS="\t" '{ if ($NF>=0.5) $NF=1; else $NF=0; print $4, $6, $7, $NF }' \
+            > $famID.RD_genotype_update.txt
+            #Duplications
+            awk -v OFS="\t" '{ if ($NF=="DUP") print $0, "1" }' $pro.CNVs.gt5kb.bed \
+            | bedtools coverage -a - \
+              -b <( awk '{ if ($5 ~ /DUP|MCNV/) print $0 }' $fa.CNVs.bed ) \
+            | awk -v OFS="\t" '{ if ($NF>=0.5) $NF=1; else $NF=0; print $1, $2, $3, $4, $5, $6, $NF }' \
+            | bedtools coverage -a - \
+              -b <( awk '{ if ($5 ~ /DUP|MCNV/) print $0 }' $mo.CNVs.bed ) \
+            | awk -v OFS="\t" '{ if ($NF>=0.5) $NF=1; else $NF=0; print $4, $6, $7, $NF }' \
+            >> $famID.RD_genotype_update.txt
+            #Get variant stats
+            /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/gather_trio_genos.py \
+              --ac-adj $famID.RD_genotype_update.txt \
+              --no-header \
+              $famID.vcf.gz stdout "$pro" "$fa" "$mo" \
+            | awk -v famID="$famID" -v OFS="\t" '{ print famID, $0 }'
           fi
         done < ${famfile}
       done < ${write_lines(vcf_shards)}
@@ -403,17 +536,42 @@ task collect_trio_SVdat {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:7c08627780b347f52ba49220c289a602984090a019107a1cac5a4158623bf462"
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
     preemptible: 1
+    maxRetries: 2
     memory: "4 GB"
     disks: "local-disk 50 HDD"
   }
 }
 
 
+# Gather all trio SV data into a single tarball (helps with Cromwell file localization)
+task gather_trio_dat {
+  Array[File] files
+  String prefix
+
+  command <<<
+    tar -czvf ${prefix}.tar.gz -T ${write_lines(files)}
+  >>>
+
+  output {
+    File tarball = "${prefix}.tar.gz"
+  }
+
+  runtime {
+    preemptible: 1
+    maxRetries: 1
+    docker : "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
+    disks: "local-disk 250 SSD"
+    memory: "4 GB"
+  }  
+}
+
+
 # Enumerate all minGQ conditions to test
 task enumerate_conditions {
   String prefix
+  Int condition_shards
   String optimize_minSizes
   String optimize_maxSizes
   String optimize_minFreqs
@@ -425,152 +583,58 @@ task enumerate_conditions {
   String optimize_excludeEV
 
   command <<<
-      /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/create_minGQ_tranches_table.R \
-        --min.sizes "${optimize_minSizes}" \
-        --max.sizes "${optimize_maxSizes}" \
-        --min.freqs "${optimize_minFreqs}" \
-        --max.freqs "${optimize_maxFreqs}" \
-        --svtype.include "${optimize_includeSVTYPEs}" \
-        --filter.include "${optimize_includeFILTERs}" \
-        --filter.exclude "${optimize_excludeFILTERs}" \
-        --ev.include "${optimize_includeEV}" \
-        --ev.exclude "${optimize_excludeEV}" \
-        "${prefix}.minGQ_conditions.txt"
-      fgrep -v "#" "${prefix}.minGQ_conditions.txt" \
-        > "${prefix}.minGQ_conditions.noHeader.txt"
+    /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/create_minGQ_tranches_table.R \
+      --min.sizes "${optimize_minSizes}" \
+      --max.sizes "${optimize_maxSizes}" \
+      --min.freqs "${optimize_minFreqs}" \
+      --max.freqs "${optimize_maxFreqs}" \
+      --svtype.include "${optimize_includeSVTYPEs}" \
+      --filter.include "${optimize_includeFILTERs}" \
+      --filter.exclude "${optimize_excludeFILTERs}" \
+      --ev.include "${optimize_includeEV}" \
+      --ev.exclude "${optimize_excludeEV}" \
+      "${prefix}.minGQ_conditions.txt"
+    fgrep -v "#" "${prefix}.minGQ_conditions.txt" \
+      > "${prefix}.minGQ_conditions.noHeader.txt"
+    /opt/sv-pipeline/04_variant_resolution/scripts/evenSplitter.R \
+      -S ${condition_shards} \
+      "${prefix}.minGQ_conditions.noHeader.txt" \
+      "${prefix}.minGQ_conditions.noHeader.shard"
   >>>
 
   output {
     File minGQ_conditions_table = "${prefix}.minGQ_conditions.txt"
     File minGQ_conditions_table_noHeader = "${prefix}.minGQ_conditions.noHeader.txt"
+    Array[File] minGQ_conditions_table_noHeader_shards = glob("${prefix}.minGQ_conditions.noHeader.shard*")
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:7c08627780b347f52ba49220c289a602984090a019107a1cac5a4158623bf462"
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
 
-# Subset variants to meet a given set of conditions, merge across trios, 
-# and run ROC if condition has enough variants per sample
-task filter_merge_variants_withROC {
-  Array[File] trio_SVdat
-  String prefix
-  File trios_list
-  String condition_id
-  String minSVLEN
-  String maxSVLEN
-  String minAF
-  String maxAF
-  String includeSVTYPE
-  String excludeSVTYPE
-  String includeFILTER
-  String excludeFILTER
-  String includeEV
-  String excludeEV
-  Int maxSVperTrio
-  Float ROC_maxFDR
-  Int ROC_minGQ
-  Int ROC_maxGQ
-  Int ROC_stepGQ
-  Int min_SV_per_proband_per_condition
-
+# Merge ROC optimal cutoffs or stats
+task combine_roc_opt_results {
+  Array[File] shards
+  String outfile
 
   command <<<
-    #Iterate over families and process them one at a time
-    while read famdat; do
-      #Subset to variants matching condition
-      /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/subset_minGQ_trio_data.R \
-        --min.size "${minSVLEN}" \
-        --max.size "${maxSVLEN}" \
-        --min.freq "${minAF}" \
-        --max.freq "${maxAF}" \
-        --svtype.include "${includeSVTYPE}" \
-        --svtype.exclude "${excludeSVTYPE}" \
-        --filter.include "${includeFILTER}" \
-        --filter.exclude "${excludeFILTER}" \
-        --ev.include "${includeEV}" \
-        --ev.exclude "${excludeEV}" \
-        --max.variants "${maxSVperTrio}" \
-        "$famdat" /dev/stdout
-    done < ${write_lines(trio_SVdat)} \
-    | gzip -c \
-    > "${prefix}.${condition_id}.trio_variants.txt.gz"
-    #Compute median # of filtered calls per trio
-    if [ $( zcat "${prefix}.${condition_id}.trio_variants.txt.gz" | wc -l ) -gt 0 ]; then
-      /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/helper_median_counts_per_trio.R \
-        --ID "${condition_id}" \
-        "${prefix}.${condition_id}.trio_variants.txt.gz" \
-        "${trios_list}" \
-        "${prefix}.${condition_id}.perTrio_distrib_stats.txt"
-      med=$( fgrep -v "#" "${prefix}.${condition_id}.perTrio_distrib_stats.txt" | cut -f2 )
-    else
-      echo -e "#condition\thetsPerProband_median\thetsPerProband_Q1\thetsPerProband_Q2\n${condition_id}\t0\t0\t0" \
-      > "${prefix}.${condition_id}.perTrio_distrib_stats.txt"
-      med=0
-    fi
-    #Run ROC if enough variants per proband
-    echo -e "FINISHED FILTERING. FOUND $med MEDIAN QUALIFYING VARIANTS PER CHILD."
-    if [ "$med" -gt ${min_SV_per_proband_per_condition} ]; then
-      echo -e "STARTING ROC OPTIMIZATION."
-      /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/optimize_minGQ_ROC_v2.R \
-        --prefix "${condition_id}" \
-        --fdr "${ROC_maxFDR}" \
-        --minGQ "${ROC_minGQ}" \
-        --maxGQ "${ROC_maxGQ}" \
-        --step "${ROC_stepGQ}" \
-        "${prefix}.${condition_id}.trio_variants.txt.gz" \
-        "${trios_list}" \
-        "./"
-      gzip "${condition_id}.minGQ_ROC.data.txt"
-    else
-      echo -e "TOO FEW VARIANTS FOR ROC OPTIMIZATION."
-      touch "${condition_id}.minGQ_ROC.data.txt.gz"
-      touch "${condition_id}.minGQ_ROC.optimal.txt"
-      touch "${condition_id}.minGQ_ROC.plot.pdf"
-    fi
+    cat ${sep=" " shards} | fgrep -v "#" | sort -Vk1,1 > ${outfile}
   >>>
 
   output {
-    File distrib_stats = "${prefix}.${condition_id}.perTrio_distrib_stats.txt"
-    File ROC_data = "${condition_id}.minGQ_ROC.data.txt.gz"
-    File ROC_optimal = "${condition_id}.minGQ_ROC.optimal.txt"
-    File ROC_plot = "${condition_id}.minGQ_ROC.plot.pdf"
+    File merged_file = "${outfile}"
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:7c08627780b347f52ba49220c289a602984090a019107a1cac5a4158623bf462"
+    docker: "talkowski/sv-pipeline@sha256:4900cae92f1f8bc98c54f89444a00e134ac4c86ca55543e2646f024270a29a69"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
     disks: "local-disk 50 HDD"
-  }
-}
-
-
-# Merge all ROC optimal cutoffs into single file for tree reconstruction
-task combine_roc_opt_results {
-  Array[File] condition_optimizations
-  Array[File] condition_distrib_stats
-  String prefix
-
-  command <<<
-    find / -name "*.minGQ_ROC.optimal.txt" \
-    | xargs -I {} cat {} | fgrep -v "#" | sort -Vk1,1 \
-    > "${prefix}.minGQ_condition_opts.txt"
-    find / -name "*.perTrio_distrib_stats.txt" \
-    | xargs -I {} cat {} | fgrep -v "#" | sort -Vk1,1 \
-    > "${prefix}.minGQ_condition_distrib_stats.txt"
-  >>>
-
-  output {
-    File combined_optimizations = "${prefix}.minGQ_condition_opts.txt"
-    File combined_distrib_stats = "${prefix}.minGQ_condition_distrib_stats.txt"
-  }
-
-  runtime {
-    docker: "talkowski/sv-pipeline@sha256:7c08627780b347f52ba49220c289a602984090a019107a1cac5a4158623bf462"
-    preemptible: 1
   }
 }
 
@@ -598,8 +662,9 @@ task build_filter_tree {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:7c08627780b347f52ba49220c289a602984090a019107a1cac5a4158623bf462"
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -641,10 +706,11 @@ task apply_minGQ_filter {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:52c97ee16d3b5c62872bd43bbae75c2b2547d52558e449c808c476e4838f8f7b"
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
     disks: "local-disk 20 SSD"
     memory: "4 GB"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -686,7 +752,8 @@ task merge_PCR_VCFs {
 
   runtime {
     preemptible: 1
-    docker : "talkowski/sv-pipeline@sha256:7c08627780b347f52ba49220c289a602984090a019107a1cac5a4158623bf462"
+    maxRetries: 1
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
     disks: "local-disk 250 SSD"
     memory: "4 GB"
   }
@@ -705,7 +772,8 @@ task combine_vcfs {
 
   runtime {
     preemptible: 0
-    docker : "talkowski/sv-pipeline@sha256:7c08627780b347f52ba49220c289a602984090a019107a1cac5a4158623bf462"
+    maxRetries: 1
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
     disks: "local-disk 250 SSD"
     memory: "4 GB"
   }

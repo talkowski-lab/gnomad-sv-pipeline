@@ -1,4 +1,4 @@
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:04_vcfcluster_tasks_per_chrom/versions/12/plain-WDL/descriptor" as vcfcluster_tasks
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:04_vcfcluster_tasks_per_chrom/versions/17/plain-WDL/descriptor" as vcfcluster_tasks
 
 # Copyright (c) 2018 Talkowski Lab
 
@@ -96,13 +96,14 @@ task join_vcfs {
   File svc_acct_key
 
   command <<<
+    set -euo pipefail
     #Remote tabix all vcfs to chromosome of interest
     echo "REMOTE TABIXING VCFs"
     while read batch vcf_path vcf_idx_path; do
       gsutil cp "$vcf_idx_path" "$batch.vcf.gz.idx";
       url=$( gsutil signurl -d 24h ${svc_acct_key} "$vcf_path" | sed '1d' | cut -f 4 );
       echo $url;
-      svtk remote_tabix --header "$url" "$batch.vcf.gz.idx" "${contig}:0-300000000" > "$batch.${contig}.vcf"
+      svtk remote_tabix --header "$url" "$batch.vcf.gz.idx" "${contig}:0-300000000" |sed "s/AN=[0-9]*;//g"|sed "s/AC=[0-9]*;//g"> "$batch.${contig}.vcf"
       bgzip -f "$batch.${contig}.vcf"
     done < <( paste ${batches_list} ${vcf_list} ${vcf_idx_list} )
     find `pwd` -name "*.vcf.gz"
@@ -152,7 +153,7 @@ task join_vcfs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline-remote-pysam@sha256:5b4b2b6d713c79e706dc3a2c2590fc6a34f1d93b90152013c97d9146e53d99f9"
+    docker: "talkowski/sv-pipeline-remote-pysam@sha256:e3268dac103ee611214d0fdc44ab0485d4dc1f5f795512cf6bb1f4cfc3da1dc8"
     preemptible: 1
     memory: "8 GB"
     disks: "local-disk 1000 SSD"
@@ -169,6 +170,7 @@ task subset_variant_list {
   String run
 
   command <<<
+    set -e
     if [ ${run} == "TRUE" ]; then
       #Get list of variants present in VCF
       zcat ${vcf} | cut -f1-3 | fgrep -v "#" | cut -f3 > valid_vids.list;
@@ -184,11 +186,8 @@ task subset_variant_list {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:b359f2cb0c9d5f5a55eb4c41fd362f4e574bf3f8f0f395a2907837571b367ee0"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 1
     disks: "local-disk 30 SSD"
   }
 }
-
-
-

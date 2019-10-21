@@ -1,4 +1,4 @@
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:04_genotype_CPX_CNVs_perBatch/versions/19/plain-WDL/descriptor" as rd_gt_perbatch
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:04_genotype_CPX_CNVs_perBatch/versions/28/plain-WDL/descriptor" as rd_gt_perbatch
 
 # Copyright (c) 2018 Talkowski Lab
 
@@ -91,8 +91,9 @@ task get_cpx_cnv_intervals {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:c2af5febc8967dff0b7a10cd764b292f43029ffd119e40832cef3fcbc3df1c1f"
+    docker: "talkowski/sv-pipeline@sha256:5ff4bd3264cc61fc69e37cd2e307e3b5ab8458fec2606e1b57d4b1f73fecead0"
     preemptible: 1
+    maxRetries: 1
     memory: "8 GB"
     disks: "local-disk 100 HDD"
   }
@@ -118,8 +119,9 @@ task merge_melted_gts {
   }
 
     runtime {
-    docker: "talkowski/sv-pipeline@sha256:c2af5febc8967dff0b7a10cd764b292f43029ffd119e40832cef3fcbc3df1c1f"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 100 HDD"
   }
 }
@@ -152,8 +154,9 @@ task parse_gts {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:c2af5febc8967dff0b7a10cd764b292f43029ffd119e40832cef3fcbc3df1c1f"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 100 HDD"
   }
 }
@@ -173,8 +176,9 @@ task concat_vcfs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:c2af5febc8967dff0b7a10cd764b292f43029ffd119e40832cef3fcbc3df1c1f"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 300 HDD"
   }
 }

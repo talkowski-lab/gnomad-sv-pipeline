@@ -8,7 +8,7 @@
 # Workflow to perform final sample pruning & compute all relevant AF statistics
 # for a VCF from the Talkowski SV pipeline
 
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:compute_simple_AFs_singleChrom/versions/10/plain-WDL/descriptor" as calcAF
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:compute_simple_AFs_singleChrom/versions/14/plain-WDL/descriptor" as calcAF
 
 workflow prune_and_add_vafs {
   File vcf
@@ -19,6 +19,7 @@ workflow prune_and_add_vafs {
   File? famfile                 #Used for M/F AF calculations
   Int sv_per_shard
   File contiglist
+  String? drop_empty_records
 
   Array[Array[String]] contigs=read_tsv(contiglist)
 
@@ -43,7 +44,8 @@ workflow prune_and_add_vafs {
         sv_per_shard=sv_per_shard,
         prefix=prefix,
         sample_pop_assignments=sample_pop_assignments,
-        famfile=famfile
+        famfile=famfile,
+        drop_empty_records=drop_empty_records
     }
   }
 
@@ -94,8 +96,9 @@ task prune_vcf {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:831595263ca60288fa8512602d1a3f1fcc23c3f31a6a8f0db2e597138b5e3d36"
+    docker: "talkowski/sv-pipeline@sha256:4900cae92f1f8bc98c54f89444a00e134ac4c86ca55543e2646f024270a29a69"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
     disks: "local-disk 250 SSD"
   }
@@ -118,8 +121,9 @@ task concat_vcfs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:7f1e8ae2c7ce7779fc3de75a67841fde21bbd5be657911abd26e8551aba9e8a5"
+    docker: "talkowski/sv-pipeline@sha256:4900cae92f1f8bc98c54f89444a00e134ac4c86ca55543e2646f024270a29a69"
     preemptible: 1
+    maxRetries: 1
     memory: "16 GB"
     disks: "local-disk 250 SSD"
   }

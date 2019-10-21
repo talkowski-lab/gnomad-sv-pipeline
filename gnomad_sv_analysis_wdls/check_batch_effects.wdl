@@ -9,8 +9,8 @@
 # Talkowski lab SV pipeline, and mark sites that appear batch-specific
 
 
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:prune_and_add_vfs/versions/13/plain-WDL/descriptor" as calcAF
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:gather_batch_effects_helper/versions/8/plain-WDL/descriptor" as helper
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:prune_and_add_vfs/versions/17/plain-WDL/descriptor" as calcAF
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:gather_batch_effects_helper/versions/10/plain-WDL/descriptor" as helper
 
 
 workflow check_batch_effects {
@@ -25,8 +25,12 @@ workflow check_batch_effects {
   File contiglist
   Int variants_per_shard
   String prefix
+  File AF_PCRPLUS_preMinGQ
+  File AF_PCRMINUS_preMinGQ
+
 
   Array[Array[String]] batches = read_tsv(batches_list)
+  Array[Array[String]] contigs = read_tsv(contiglist)
 
   # Shard VCF per batch, compute pops-specific AFs, and convert to table of VID & AF stats
   scatter ( batch in batches ) {
@@ -49,9 +53,10 @@ workflow check_batch_effects {
         prune_list=get_batch_samples_list.exclude_samples_list,
         famfile=famfile,
         sv_per_shard=25000,
-        contiglist=contiglist
+        contiglist=contiglist,
+        drop_empty_records="FALSE"
     }
-    # Get minimal table of AF data per batch
+    # Get minimal table of AF data per batch, split by ancestry
     call get_freq_table {
       input:
         vcf=getAFs.output_vcf,
@@ -64,6 +69,22 @@ workflow check_batch_effects {
     input:
       tables=get_freq_table.freq_data,
       batches_list=batches_list,
+      prefix=prefix
+  }
+  call merge_freq_tables as merge_freq_tables_allPops {
+    input:
+      tables=get_freq_table.freq_data_allPops,
+      batches_list=batches_list,
+      prefix=prefix
+  }
+
+  # Compare frequencies before and after minGQ, and generate list of variants
+  # that are significantly different between the steps
+  call compare_freqs_prePost_minGQ {
+    input:
+      AF_PCRPLUS_preMinGQ=AF_PCRPLUS_preMinGQ,
+      AF_PCRMINUS_preMinGQ=AF_PCRMINUS_preMinGQ,
+      AF_postMinGQ_table=merge_freq_tables_allPops.merged_table,
       prefix=prefix
   }
 
@@ -135,18 +156,28 @@ workflow check_batch_effects {
   }
 
   # Apply batch effect labels
-  call apply_batch_effect_labels {
+  scatter ( contig in contigs ) {
+    call apply_batch_effect_labels as apply_labels_perContig {
+      input:
+        vcf=vcf,
+        vcf_idx=vcf_idx,
+        contig=contig[0],
+        reclassification_table=make_reclassification_table.reclassification_table,
+        PCRPLUS_samples_list=PCRPLUS_samples_list,
+        minGQ_prePost_PCRPLUS_fails=compare_freqs_prePost_minGQ.PCRPLUS_fails,
+        minGQ_prePost_PCRMINUS_fails=compare_freqs_prePost_minGQ.PCRMINUS_fails,
+        prefix="${prefix}.${contig[0]}"
+    }
+  }
+  call concat_vcfs as merge_labeled_vcfs {
     input:
-      vcf=vcf,
-      vcf_idx=vcf_idx,
-      reclassification_table=make_reclassification_table.reclassification_table,
-      PCRPLUS_samples_list=PCRPLUS_samples_list,
-      prefix=prefix
+      vcfs=apply_labels_perContig.labeled_vcf,
+      outfile_prefix="${prefix}.batch_effects_labeled_merged"
   }
 
   output {
-    File labeled_vcf = apply_batch_effect_labels.labeled_vcf
-    File labeled_vcf_idx = apply_batch_effect_labels.labeled_vcf_idx
+    File labeled_vcf = merge_labeled_vcfs.concat_vcf
+    File labeled_vcf_idx = merge_labeled_vcfs.concat_vcf_idx
   }
 }
 
@@ -161,6 +192,7 @@ task get_batch_samples_list {
   File probands_list
 
   command <<<
+    set -euo pipefail
     # Get list of all samples present in VCF header
     tabix -H ${vcf} | fgrep -v "##" | cut -f10- | sed 's/\t/\n/g' | sort -Vk1,1 \
     > all_samples.list
@@ -168,12 +200,12 @@ task get_batch_samples_list {
     fgrep -w ${batch} ${sample_batch_assignments} | cut -f1 \
     | fgrep -wf - all_samples.list \
     | fgrep -wvf ${probands_list} \
-    > "${batch}.samples.list"
+    > "${batch}.samples.list" || true
     # Get list of samples not in batch
     fgrep -wv ${batch} ${sample_batch_assignments} | cut -f1 \
     cat - ${probands_list} | sort -Vk1,1 | uniq \
     | fgrep -wf - all_samples.list \
-    > "${batch}.exclude_samples.list"
+    > "${batch}.exclude_samples.list" || true
   >>>
 
   output {
@@ -183,7 +215,8 @@ task get_batch_samples_list {
 
   runtime {
     preemptible: 1
-    docker : "talkowski/sv-pipeline@sha256:58b67cb4e4edf285b89250d2ebab72e17c0247e3bf6891c2c2fcda646b2a6cf4"
+    maxRetries: 1
+    docker : "talkowski/sv-pipeline@sha256:aef8156983cec6ac6a91fa6461b197a63835e5487fc9523ec857f947cfac660e"
     disks: "local-disk 50 SSD"
   }
 }
@@ -195,11 +228,13 @@ task get_freq_table {
   String prefix
 
   command <<<
+    set -euo pipefail
     #Run vcf2bed
     svtk vcf2bed \
       --info ALL \
       --no-samples \
       ${vcf} "${prefix}.vcf2bed.bed"
+    ### Create table of freqs by ancestry
     #Cut to necessary columns
     idxs=$( sed -n '1p' "${prefix}.vcf2bed.bed" \
             | sed 's/\t/\n/g' \
@@ -207,7 +242,7 @@ task get_freq_table {
             | grep -e 'name\|SVLEN\|SVTYPE\|_AC\|_AN' \
             | fgrep -v "OTH" \
             | cut -f2 \
-            | paste -s -d\, )
+            | paste -s -d\, || true )
     cut -f"$idxs" "${prefix}.vcf2bed.bed" \
     | sed 's/^name/\#VID/g' \
     | gzip -c \
@@ -216,18 +251,30 @@ task get_freq_table {
     /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/clean_frequencies_table.R \
       "${prefix}.frequencies.preclean.txt.gz" \
       "${prefix}.frequencies.txt"
+    ### Create table of freqs, irrespective of ancestry
+    #Cut to necessary columns
+    idxs=$( sed -n '1p' "${prefix}.vcf2bed.bed" \
+            | sed 's/\t/\n/g' \
+            | awk -v OFS="\t" '{ if ($1=="name" || $1=="SVLEN" || $1=="SVTYPE" || $1=="AC" || $1=="AN") print NR }' \
+            | paste -s -d\, || true )
+    cut -f"$idxs" "${prefix}.vcf2bed.bed" \
+    | sed 's/^name/\#VID/g' \
+    | gzip -c \
+    > "${prefix}.frequencies.allPops.txt.gz"
   >>>
 
   output {
     File freq_data = "${prefix}.frequencies.txt.gz"
+    File freq_data_allPops = "${prefix}.frequencies.allPops.txt.gz"
     # File freqs_preclean = "${prefix}.frequencies.preclean.txt.gz"
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:5a5bb420b823b129a15ca49ac2e6d3862984c5dd1b8ec91a49ee1ba803685d83"
+    docker : "talkowski/sv-pipeline@sha256:aef8156983cec6ac6a91fa6461b197a63835e5487fc9523ec857f947cfac660e"
     disks: "local-disk 50 HDD"
     memory: "4 GB"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -239,16 +286,18 @@ task merge_freq_tables {
   String prefix
 
   command <<<
+    set -euo pipefail
     #Get list of batch IDs and batch table paths
     while read batch; do
       echo "$batch"
-      find / -name "$batch.frequencies.txt.gz"
+      find / -name "$batch.frequencies*txt.gz"
     done < ${batches_list} | paste - - \
     > input.list
     #Make sure all input files have the same number of lines
-    nlines=$( while read batch file; do
-                zcat "$file" | wc -l
-              done < input.list | sort | uniq | wc -l )
+    while read batch file; do
+      zcat "$file" | wc -l
+    done < input.list > nlines.list
+    nlines=$( cat nlines.list | sort | uniq | wc -l )
     if [ "$nlines" -gt 1 ]; then
       echo "AT LEAST ONE INPUT FILE HAS A DIFFERENT NUMBER OF LINES"
       exit 0
@@ -295,10 +344,45 @@ task merge_freq_tables {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:02e52b8a3f158ee2a3e2c299385a92d3f75baf6aae2a810e79b39d343887f8da"
+    docker : "talkowski/sv-pipeline@sha256:aef8156983cec6ac6a91fa6461b197a63835e5487fc9523ec857f947cfac660e"
     disks: "local-disk 100 HDD"
     memory: "16 GB"
     preemptible: 1
+    maxRetries: 1
+  }
+}
+
+
+# Compare 
+task compare_freqs_prePost_minGQ {
+  File AF_PCRPLUS_preMinGQ
+  File AF_PCRMINUS_preMinGQ
+  File AF_postMinGQ_table
+  String prefix
+
+  command <<<
+    set -euo pipefail
+    /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/compare_freqs_pre_post_minGQ.R \
+      ${AF_PCRPLUS_preMinGQ} \
+      ${AF_PCRMINUS_preMinGQ} \
+      ${AF_postMinGQ_table} \
+      ./ \
+      "${prefix}."
+  >>>
+
+  output {
+    File PCRPLUS_fails = "${prefix}.PCRPLUS_minGQ_AF_prePost_fails.VIDs.list"
+    File PCRMINUS_fails = "${prefix}.PCRMINUS_minGQ_AF_prePost_fails.VIDs.list"
+    File minGQ_prePost_comparison_data = "${prefix}.minGQ_AF_prePost_comparison.data.txt.gz"
+    File minGQ_prePost_comparison_plot = "${prefix}.minGQ_AF_prePost_comparison.plot.png"
+  }
+
+  runtime {
+    docker : "talkowski/sv-pipeline@sha256:6552363ba2a13147940084658eff35171242c3e71442bc6936a2b5e53b3501ce"
+    disks: "local-disk 30 HDD"
+    memory: "8 GB"
+    preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -311,6 +395,7 @@ task make_correlation_matrices {
   String prefix
 
   command <<<
+    set -euo pipefail
     /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/correlate_batches_singlePop.R \
       ${batches_list} \
       ${freq_table} \
@@ -325,10 +410,11 @@ task make_correlation_matrices {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:f4a86948e52c171cc7e58034e3d8bc4819a0d6932925fd4874bca6a91baa5c3c"
+    docker : "talkowski/sv-pipeline@sha256:aef8156983cec6ac6a91fa6461b197a63835e5487fc9523ec857f947cfac660e"
     disks: "local-disk 50 HDD"
     memory: "8 GB"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -339,6 +425,7 @@ task make_batch_pairs_list {
   String prefix
 
   command <<<
+    set -euo pipefail
     /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/make_batch_pairs_list.R \
       ${batches_list} \
       "${prefix}.nonredundant_batch_pairs.txt"
@@ -349,8 +436,9 @@ task make_batch_pairs_list {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:e06c6701a50be7513e3eae7397d3a5d9290fe0dd9a457e574de2f58f5d337b69"
+    docker : "talkowski/sv-pipeline@sha256:aef8156983cec6ac6a91fa6461b197a63835e5487fc9523ec857f947cfac660e"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -361,6 +449,7 @@ task merge_variant_failure_lists {
   String prefix
 
   command <<<
+    set -euo pipefail
     #Write list of paths to all batch effect variant lists
     while read path; do
       echo "$path"
@@ -372,27 +461,27 @@ task merge_variant_failure_lists {
     | xargs -I {} cat {} \
     | sort -Vk1,1 | uniq -c \
     | awk -v OFS="\t" '{ print $2, $1 }' \
-    > "${prefix}.PCRPLUS_to_PCRPLUS.failures.txt"
+    > "${prefix}.PCRPLUS_to_PCRPLUS.failures.txt" || true
     #Get master list of PCR- to PCR- failures
     fgrep -v "PCRPLUS" fail_variant_lists.paths.txt \
     | fgrep "PCRMINUS" \
     | xargs -I {} cat {} \
     | sort -Vk1,1 | uniq -c \
     | awk -v OFS="\t" '{ print $2, $1 }' \
-    > "${prefix}.PCRMINUS_to_PCRMINUS.failures.txt"
+    > "${prefix}.PCRMINUS_to_PCRMINUS.failures.txt" || true
     #Get master list of PCR+ to PCR- failures
     fgrep "PCRPLUS" fail_variant_lists.paths.txt \
     | fgrep "PCRMINUS" \
     | xargs -I {} cat {} \
     | sort -Vk1,1 | uniq -c \
     | awk -v OFS="\t" '{ print $2, $1 }' \
-    > "${prefix}.PCRPLUS_to_PCRMINUS.failures.txt"
+    > "${prefix}.PCRPLUS_to_PCRMINUS.failures.txt" || true
     #Get master list of all possible failures
     cat fail_variant_lists.paths.txt \
     | xargs -I {} cat {} \
     | sort -Vk1,1 | uniq -c \
     | awk -v OFS="\t" '{ print $2, $1 }' \
-    > "${prefix}.all.failures.txt"
+    > "${prefix}.all.failures.txt" || true
   >>>
 
   output {
@@ -403,8 +492,9 @@ task merge_variant_failure_lists {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:e06c6701a50be7513e3eae7397d3a5d9290fe0dd9a457e574de2f58f5d337b69"
+    docker : "talkowski/sv-pipeline@sha256:aef8156983cec6ac6a91fa6461b197a63835e5487fc9523ec857f947cfac660e"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -419,6 +509,7 @@ task make_reclassification_table {
   String prefix
 
   command <<<
+    set -euo pipefail
     /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/make_batch_effect_reclassification_table.R \
       ${freq_table} \
       ${pairwise_fails} \
@@ -433,8 +524,9 @@ task make_reclassification_table {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:a182bde10e0540e915ec3c0ef2c89b281e392c962ccc50f7a1c4503c20698ae4"
+    docker : "talkowski/sv-pipeline@sha256:aef8156983cec6ac6a91fa6461b197a63835e5487fc9523ec857f947cfac660e"
     preemptible: 1
+    maxRetries: 1
     memory: "8 GB"
   }
 }
@@ -444,16 +536,23 @@ task make_reclassification_table {
 task apply_batch_effect_labels {
   File vcf
   File vcf_idx
+  String contig
   File reclassification_table
   File PCRPLUS_samples_list
+  File minGQ_prePost_PCRPLUS_fails
+  File minGQ_prePost_PCRMINUS_fails
   String prefix
 
   command <<<
-    /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/label_batch_effects.py \
-    ${vcf} \
-    ${reclassification_table} \
-    ${PCRPLUS_samples_list} \
-    stdout \
+    set -euo pipefail
+    tabix -h ${vcf} ${contig} \
+    | /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/label_batch_effects.py \
+        --unstable-af-pcrplus ${minGQ_prePost_PCRPLUS_fails} \
+        --unstable-af-pcrminus ${minGQ_prePost_PCRMINUS_fails} \
+        stdin \
+        ${reclassification_table} \
+        ${PCRPLUS_samples_list} \
+        stdout \
     | bgzip -c \
     > "${prefix}.batch_effects_labeled.vcf.gz"
     tabix -p vcf -f "${prefix}.batch_effects_labeled.vcf.gz"
@@ -465,10 +564,36 @@ task apply_batch_effect_labels {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:a182bde10e0540e915ec3c0ef2c89b281e392c962ccc50f7a1c4503c20698ae4"
-    preemptible: 0
+    docker : "talkowski/sv-pipeline@sha256:4a428d92c780b70f0fc57ca2024c2edc19aefd0c6e08dc9f01515bd4f7804a4d"
+    preemptible: 1
+    maxRetries: 1
     disks: "local-disk 50 HDD"
     memory: "4 GB"
+  }
+}
+
+
+#General task to combine multiple VCFs
+task concat_vcfs {
+  Array[File] vcfs
+  String outfile_prefix
+
+  command <<<
+    vcf-concat ${sep=' ' vcfs} | vcf-sort -c | bgzip -c > ${outfile_prefix}.vcf.gz; 
+    tabix -p vcf -f "${outfile_prefix}.vcf.gz"
+  >>>
+
+  output {
+    File concat_vcf = "${outfile_prefix}.vcf.gz"
+    File concat_vcf_idx = "${outfile_prefix}.vcf.gz.tbi"
+  }
+
+  runtime {
+    docker: "talkowski/sv-pipeline@sha256:4a428d92c780b70f0fc57ca2024c2edc19aefd0c6e08dc9f01515bd4f7804a4d"
+    preemptible: 0
+    maxRetries: 1
+    memory: "16 GB"
+    disks: "local-disk 250 SSD"
   }
 }
 

@@ -95,8 +95,12 @@ task annotate_coding {
   String gene_set
 
   command <<<
+    set -euo pipefail
+    # Note: as of BEDTools 2.28, there are issues with reading bgzip-compressed files
+    # directly into intersect/coverage, so GTF needs to be decompressed first
+    zcat ${gtf} > decompressed.gtf
     svtk annotate \
-      --gencode ${gtf} \
+      --gencode decompressed.gtf \
       ${vcf} \
       ${prefix}.${gene_set}.vcf
     orig=$( zcat ${vcf} | cut -f1 | fgrep -v "#" | wc -l )
@@ -113,10 +117,11 @@ task annotate_coding {
   }
 
   runtime {
-      preemptible: 1
-      disks: "local-disk 50 SSD"
-      memory: "4 GB"
-      docker: "talkowski/sv-pipeline@sha256:9d172112828a0c06dc43685b189fe67551f89d1406d34d351565e9531d5a5860"
+    preemptible: 1
+    maxRetries: 1
+    disks: "local-disk 50 SSD"
+    memory: "4 GB"
+    docker: "talkowski/sv-pipeline@sha256:e98cd2ffd787240a0fe4a075d35ffc3f6107310b881f646d5340de34910a7510"
   }
 }
 
@@ -127,6 +132,7 @@ task annotate_noncoding {
   String noncoding_set
   
   command <<<
+    set -euo pipefail
     svtk annotate \
       --noncoding ${bed} \
       ${vcf} \
@@ -145,10 +151,11 @@ task annotate_noncoding {
   }
 
   runtime {
-      preemptible: 1
-      disks: "local-disk 50 SSD"
-      memory: "4 GB"
-      docker: "talkowski/sv-pipeline@sha256:9d172112828a0c06dc43685b189fe67551f89d1406d34d351565e9531d5a5860"
+    preemptible: 1
+    maxRetries: 1
+    disks: "local-disk 50 SSD"
+    memory: "4 GB"
+    docker: "talkowski/sv-pipeline@sha256:e98cd2ffd787240a0fe4a075d35ffc3f6107310b881f646d5340de34910a7510"
   }
 }
 
@@ -164,6 +171,7 @@ task merge_annotations {
   String prefix
   
   command <<<
+    set -euo pipefail
     /opt/sv-pipeline/05_annotation/scripts/merge_annotations.py \
       ${vcf} \
       ${protein_coding_vcf} \
@@ -185,9 +193,10 @@ task merge_annotations {
   }
 
   runtime {
-      preemptible: 1
-      disks: "local-disk 250 SSD"
-      memory: "8 GB"
-      docker: "talkowski/sv-pipeline@sha256:9d172112828a0c06dc43685b189fe67551f89d1406d34d351565e9531d5a5860"
+    preemptible: 1
+    maxRetries: 1
+    disks: "local-disk 250 SSD"
+    memory: "8 GB"
+    docker: "talkowski/sv-pipeline@sha256:e98cd2ffd787240a0fe4a075d35ffc3f6107310b881f646d5340de34910a7510"
   }
 }

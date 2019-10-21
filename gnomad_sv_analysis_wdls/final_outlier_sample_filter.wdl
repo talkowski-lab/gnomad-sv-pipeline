@@ -1,4 +1,4 @@
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:gather_attribute_paths_multiSampleSet/versions/7/plain-WDL/descriptor" as getAttribute
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:gather_attribute_paths_multiSampleSet/versions/10/plain-WDL/descriptor" as getAttribute
 
 # Copyright (c) 2018 Talkowski Lab
 
@@ -103,12 +103,13 @@ task write_samples_list {
   String prefix
 
   command <<<
+    set -euo pipefail
     tabix -H ${vcf} | fgrep -v "##" \
     | cut -f10- | sed 's/\t/\n/g' > "${prefix}.samples.list"
     fgrep -wf ${PCRPLUS_samples_list} "${prefix}.samples.list" \
-    > "${prefix}.PCRPLUS.samples.list"
+    > "${prefix}.PCRPLUS.samples.list" || true
     fgrep -wvf ${PCRPLUS_samples_list} "${prefix}.samples.list" \
-    > "${prefix}.PCRMINUS.samples.list"
+    > "${prefix}.PCRMINUS.samples.list" || true
   >>>
 
   output {
@@ -118,8 +119,9 @@ task write_samples_list {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:ef7584fc2cd354567d98b7f0d8ba4c83ac79f73a8c337ebaf765f8ff008c274c"
+    docker: "talkowski/sv-pipeline@sha256:4900cae92f1f8bc98c54f89444a00e134ac4c86ca55543e2646f024270a29a69"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 50 HDD"
   }
 }
@@ -133,6 +135,7 @@ task count_svtypes {
   String contig
 
   command <<<
+    set -euo pipefail
     tabix --print-header "${vcf}" "${contig}" \
     | fgrep -v "MULTIALLELIC" \
     | fgrep -v "PESR_GT_OVERDISPERSION" \
@@ -146,8 +149,9 @@ task count_svtypes {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:d9dad81e3e62423b4488b598268c9d6a657c882fef8af5f0bc46a1440afeb0c9"
+    docker: "talkowski/sv-pipeline@sha256:4900cae92f1f8bc98c54f89444a00e134ac4c86ca55543e2646f024270a29a69"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 50 HDD"
   }
 }
@@ -159,6 +163,7 @@ task combine_counts {
   String prefix
 
   command <<<
+    set -euo pipefail
     while read file; do
       cat "$file"
     done < ${write_lines(svcounts)} \
@@ -174,8 +179,9 @@ task combine_counts {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:58bb6f91431f2dcf17f5f796e9a7bb50d27c58fa259471837489a0d4db7ae6aa"
+    docker: "talkowski/sv-pipeline@sha256:4900cae92f1f8bc98c54f89444a00e134ac4c86ca55543e2646f024270a29a69"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 30 HDD"
     memory: "4 GB"
   }
@@ -211,8 +217,9 @@ task identify_outliers {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:3acc88238e71346ea1e8fce673a3b613e54b8fa3f2748cee90f3f8fc7c39fc65"
+    docker: "talkowski/sv-pipeline@sha256:4900cae92f1f8bc98c54f89444a00e134ac4c86ca55543e2646f024270a29a69"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 20 HDD"
     memory: "4 GB"
   }
@@ -229,22 +236,23 @@ task exclude_outliers {
   String prefix
 
   command <<<
+    set -euo pipefail
     cat ${plus_outliers_list} ${minus_outliers_list} \
       | sort -Vk1,1 | uniq \
-      > "${prefix}.SV_count_outliers.samples.list"
+      > "${prefix}.SV_count_outliers.samples.list" || true
     tabix -H ${vcf} | fgrep -v "##" | \
       sed 's/\t/\n/g' | awk -v OFS="\t" '{ print $1, NR }' | \
       fgrep -wf "${prefix}.SV_count_outliers.samples.list" | cut -f2 > \
-      indexes_to_exclude.txt
+      indexes_to_exclude.txt || true
     if [ $( cat indexes_to_exclude.txt | wc -l ) -gt 0 ]; then
       zcat ${vcf} | \
       cut --complement -f$( cat indexes_to_exclude.txt | paste -s -d, ) | \
       bgzip -c \
-      > "${prefix}.subsetted_preEmptyRemoval.vcf.gz"
+      > "${prefix}.subsetted_preEmptyRemoval.vcf.gz" || true
       /opt/sv-pipeline/scripts/drop_empty_records.py \
         "${prefix}.subsetted_preEmptyRemoval.vcf.gz" \
         stdout | \
-      bgzip -c > ${outfile}
+      bgzip -c > ${outfile} || true
     else
       cp ${vcf} ${outfile}
     fi
@@ -258,8 +266,9 @@ task exclude_outliers {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:d3a7eabbd8a6c79cfa0426dac8fbe6527a445d0a104e270eecbbd4ad66cb74fe"
+    docker: "talkowski/sv-pipeline@sha256:4900cae92f1f8bc98c54f89444a00e134ac4c86ca55543e2646f024270a29a69"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 100 HDD"
   }
 }
@@ -272,8 +281,9 @@ task filter_sample_list {
   String prefix
 
   command <<<
+    set -euo pipefail
     fgrep -wvf ${outlier_samples} ${original_samples_list} > \
-    ${prefix}.outliers_excluded.samples.list
+    ${prefix}.outliers_excluded.samples.list || true
   >>>
 
   output {
@@ -281,7 +291,8 @@ task filter_sample_list {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:3acc88238e71346ea1e8fce673a3b613e54b8fa3f2748cee90f3f8fc7c39fc65"
+    docker: "talkowski/sv-pipeline@sha256:4900cae92f1f8bc98c54f89444a00e134ac4c86ca55543e2646f024270a29a69"
     preemptible: 1
+    maxRetries: 1
   }
 }

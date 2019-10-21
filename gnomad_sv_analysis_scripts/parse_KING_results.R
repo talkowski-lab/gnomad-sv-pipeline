@@ -17,26 +17,36 @@ require(e1071)
 ###################
 #Import fam file and split into relative classes
 #Note: assumes parents of trios are not direct relatives
-#Note: also assumes SSC naming convention
-import.famfile <- function(TRUTH_TRIOS.in){
+import.famfile <- function(TRUTH_TRIOS.in, supp.unrelateds.in=NULL){
   fam <- read.table(TRUTH_TRIOS.in,sep="\t")[,2:4]
   colnames(fam) <- c("pro","fa","mo")
-  fam <- fam[grep("SSC_",fam$pro,fixed=T),]
+  # fam <- fam[grep("SSC_",fam$pro,fixed=T),]
+  #Get parent-child pairs
   parent_child <- rbind(data.frame("ID1"=fam$pro,"ID2"=fam$fa),
                         data.frame("ID1"=fam$pro,"ID2"=fam$mo),
                         data.frame("ID1"=fam$fa,"ID2"=fam$pro),
                         data.frame("ID1"=fam$mo,"ID2"=fam$pro))
   parent_child$collapsed_IDs <- apply(parent_child,1,paste,collapse="_")
   parent_child <- parent_child[which(!(duplicated(parent_child$collapsed_IDs))),]
+  #Get unrelated pairs
   parent_parent <- rbind(data.frame("ID1"=fam$fa,"ID2"=fam$mo),
                          data.frame("ID1"=fam$mo,"ID2"=fam$fa))
+  if(!is.null(supp.unrelateds.in)){
+    supp.unrelateds <- read.table(supp.unrelateds.in, header=F, sep="\t")
+    parent_parent <- rbind(parent_parent,
+                           data.frame("ID1"=supp.unrelateds[, 1], "ID2"=supp.unrelateds[, 2]),
+                           data.frame("ID1"=supp.unrelateds[, 2], "ID2"=supp.unrelateds[, 1]))
+  }
   parent_parent$collapsed_IDs <- apply(parent_parent,1,paste,collapse="_")
   parent_parent <- parent_parent[which(!(duplicated(parent_parent$collapsed_IDs))),]
-  sibling_sibling <- do.call("rbind", lapply(fam$pro,function(ID){
+  #Get sibling pairs
+  #Only use SSC siblings, and assume SSC nomenclature
+  fam.ssc <- fam[grep("SSC_",fam$pro,fixed=T), ]
+  sibling_sibling <- do.call("rbind", lapply(fam.ssc$pro,function(ID){
     base.famID <- unlist(strsplit(ID,split="_"))[2]
     pro.IDs <- paste("SSC",base.famID,"P1",sep="_")
     sib.IDs <- paste("SSC",base.famID,"S1",sep="_")
-    if(all(sib.IDs %in% fam$pro)){
+    if(all(sib.IDs %in% fam.ssc$pro)){
       return(rbind(data.frame("ID1"=pro.IDs,"ID2"=sib.IDs),
                    data.frame("ID1"=sib.IDs,"ID2"=pro.IDs)))
     }
@@ -56,6 +66,19 @@ import.king <- function(KING.in,fam.labels){
   king$label.truth[which(king$collapsed_IDs %in% fam.labels$parent_parent$collapsed_IDs)] <- "unrelated"
   king$label.truth[which(king$collapsed_IDs %in% fam.labels$sibling_sibling$collapsed_IDs)] <- "siblings"
   return(king)
+}
+#Plot single KING metric based on truth labels
+plot.king.metric <- function(king.train, metric){
+  vals <- king.train[, which(colnames(king.train) == metric)]
+  pc <- vals[which(king.train$label.truth=="parent_child")]
+  sib <- vals[which(king.train$label.truth=="siblings")]
+  unrel <- vals[which(king.train$label.truth=="unrelated")]
+  par(mar=c(4,7,3,1))
+  boxplot(pc, sib, unrel, 
+          col=c("dodgerblue", "forestgreen", "gray50"),
+          horizontal=T, las=2, outline=F, lty=1, staple.wex=0,
+          names=c("Parent-Child", "Siblings", "Unrelated"),
+          main=metric)
 }
 #Train & apply SVM to classify relationships
 classify.relationships <- function(king,king.train){
@@ -86,15 +109,28 @@ classify.relationships <- function(king,king.train){
 #Check accuracy of inferred relationship labels
 check.label.accuracy <- function(relationships){
   acc.test.df <- relationships[which(!is.na(relationships$label.truth)),]
-  acc.test.res <- as.data.frame(t(sapply(c("unrelated","parent_child","siblings"),function(label){
-    sens <- length(which(acc.test.df$label.truth==label & acc.test.df$label.inferred==label))/length(which(acc.test.df$label.truth==label))
-    fdr <- length(which(acc.test.df$label.truth!=label & acc.test.df$label.inferred==label))/length(which(acc.test.df$label.truth!=label))
-    n.known <- length(which(acc.test.df$label.truth==label & acc.test.df$label.inferred==label))
-    n.new <- length(which(relationships$label.inferred==label))-n.known
-    return(c(sens,fdr,n.known,n.new))
+  acc.test.res <- as.data.frame(t(sapply(c("unrelated","all_related","parent_child","siblings"),function(label){
+    if(label=="all_related"){
+      related_labels <- c("parent_child", "siblings")
+      sens <- length(which(acc.test.df$label.truth %in% related_labels & acc.test.df$label.inferred %in% related_labels))/length(which(acc.test.df$label.truth %in% related_labels))
+      fdr <- length(which(!(acc.test.df$label.truth %in% related_labels) & acc.test.df$label.inferred %in% related_labels))/length(which(!(acc.test.df$label.truth %in% related_labels)))
+      n.known.raw <- length(which(acc.test.df$label.truth %in% related_labels))
+      n.known <- length(which(acc.test.df$label.truth %in% related_labels & acc.test.df$label.inferred %in% related_labels))
+      n.new <- length(which(relationships$label.inferred %in% related_labels))-n.known
+    }else{
+      sens <- length(which(acc.test.df$label.truth==label & acc.test.df$label.inferred==label))/length(which(acc.test.df$label.truth==label))
+      fdr <- length(which(acc.test.df$label.truth!=label & acc.test.df$label.inferred==label))/length(which(acc.test.df$label.truth!=label))
+      n.known.raw <- length(which(acc.test.df$label.truth==label))
+      n.known <- length(which(acc.test.df$label.truth==label & acc.test.df$label.inferred==label))
+      n.new <- length(which(relationships$label.inferred==label))-n.known
+    }
+    return(c(sens,fdr,n.known.raw,n.known,n.new))
   })))
   colnames(acc.test.res) <- c("Sensitivity","FDR",
-                              "N.known.retained","N.new.predicted")
+                              "N.known.possible","N.known.retained",
+                              "N.new.predicted")
+  acc.test.res <- cbind("Relationship"=rownames(acc.test.res),
+                        acc.test.res)
   return(acc.test.res)
 }
 #Optimize list of samples to prune
@@ -131,6 +167,9 @@ require(optparse)
 option_list <- list(
   make_option(c("-p", "--outprefix"), type="character", default="./KING_processed",
               help="output file prefix to be appended to all outputs [default %default]",
+              metavar="character"),
+  make_option(c("-u", "--unrelated"), type="character", default=NULL,
+              help="supplementary pairs of samples to assume as unrelated [default %default]",
               metavar="character")
 )
 
@@ -149,23 +188,48 @@ if(length(args$args) != 2){
 KING.in <- args$args[1]
 TRUTH_TRIOS.in <- args$args[2]
 OUTPREFIX <- opts$outprefix
+supp.unrelateds.in <- opts$unrelated
 
-# #Dev inputs (local)
+#Dev inputs (local)
 # KING.in <- "~/scratch/gnomAD_v2_SV_MASTER.king_metrics.candidate_pairs_subsetted.txt.gz"
+# KING.in <- "~/scratch/gnomAD_v2_SV_MASTER.king_metrics.train_truth_pairs.txt.gz"
 # TRUTH_TRIOS.in <- "~/scratch/gnomAD_v2.trios.prepipeline_QC_pass.fam"
 # OUTPREFIX <- "~/scratch/gnomAD_v2_SV_MASTER.KING_processed_test"
+# OUTPREFIX <- "~/scratch/gnomAD_v2_SV_MASTER.KING_truth_test"
+# supp.unrelateds.in <- "~/scratch/unrelated_sample_pairs.supplement.txt"
 
 
 ###############
 ###PROCESS DATA
 ###############
 ###Import data
-fam.labels <- import.famfile(TRUTH_TRIOS.in)
+fam.labels <- import.famfile(TRUTH_TRIOS.in, supp.unrelateds.in)
 king <- import.king(KING.in,fam.labels)
 king.train <- king[which(!is.na(king$label.truth)),]
 
+###Summarize KING training data identified
+cat(paste("\nKING training data contains", 
+          prettyNum(length(which(king.train$label.truth=="parent_child")), big.mark=","), 
+          "of", prettyNum(nrow(fam.labels$parent_child)/2, big.mark=","), 
+          "known parent-child training pairs\n", sep=" "))
+cat(paste("\nKING training data contains", 
+          prettyNum(length(which(king.train$label.truth=="siblings")), big.mark=","), 
+          "of", prettyNum(nrow(fam.labels$sibling_sibling)/2, big.mark=","), 
+          "known sibling training pairs\n", sep=" "))
+cat(paste("\nKING training data contains", 
+          prettyNum(length(which(king.train$label.truth=="unrelated")), big.mark=","), 
+          "of", prettyNum(nrow(fam.labels$parent_parent)/2, big.mark=","), 
+          "known unrelated training pairs\n", sep=" "))
+
+###Plot characteristics of training data
+sapply(c("HetHet","IBS0","HetConc","HomIBS0","Kinship","IBD1Seg","IBD2Seg","PropIBD"), function(metric){
+  pdf(paste(OUTPREFIX, metric, "training_metrics.pdf", sep="."), height=3, width=5)
+  plot.king.metric(king.train, metric)
+  dev.off()
+})
+
 ###Assign relatedness labels with SVM
-relationships <- classify.relationships(king,king.train)
+relationships <- classify.relationships(king, king.train)
 #Check & report accuracy vs known training labels
 acc.table <- check.label.accuracy(relationships)
 write.table(acc.table,

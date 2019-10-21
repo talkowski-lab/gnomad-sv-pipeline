@@ -12,8 +12,11 @@
 workflow filter_cleanup_qual_recalibration {
   File vcf
   File vcf_idx
-  File contiglist
   File PCRPLUS_samples_list
+  File famfile
+  Float min_callrate_global
+  Float min_callrate_smallDels
+  File contiglist
   String prefix
 
   Array[Array[String]] contigs = read_tsv(contiglist)
@@ -25,9 +28,13 @@ workflow filter_cleanup_qual_recalibration {
         vcf_idx=vcf_idx,
         contig=contig[0],
         PCRPLUS_samples_list=PCRPLUS_samples_list,
+        famfile=famfile,
+        min_callrate_global=min_callrate_global,
+        min_callrate_smallDels=min_callrate_smallDels,
         prefix=prefix
     }
   }
+
   call concat_vcfs {
     input:
       vcfs=cleanup.out_vcf,
@@ -47,42 +54,71 @@ task cleanup {
   File vcf_idx
   String contig
   File PCRPLUS_samples_list
+  File famfile
+  Float min_callrate_global
+  Float min_callrate_smallDels
   String prefix
 
   command <<<
-    tabix -h ${vcf} ${contig} \
+    set -euo pipefail
+    #Subset to chromosome of interest
+    tabix -h ${vcf} ${contig} | bgzip -c > input.vcf.gz
+    #Get list of PCR- samples
+    tabix -H ${vcf} | fgrep -v "##" | cut -f10- | sed 's/\t/\n/g' \
+    > all.samples.list
+    fgrep -wvf ${PCRPLUS_samples_list} all.samples.list \
+    > pcrminus.samples.list
+    #Restrict famfiles
+    while read ptn; do fgrep -w $ptn ${famfile}; done < all.samples.list > revised.fam
+    fgrep -wf pcrminus.samples.list revised.fam > revised.pcrminus.fam
+    #Compute fraction of missing genotypes per variant
+    zcat input.vcf.gz \
+    | awk '{ if ($7 !~ /MULTIALLELIC/) print $0 }' \
     | bgzip -c \
-    > input.vcf.gz
+    > input.noMCNV.vcf.gz
+    plink2 \
+      --missing variant-only \
+      --max-alleles 2 \
+      --keep-fam revised.pcrminus.fam \
+      --fam revised.fam \
+      --vcf input.noMCNV.vcf.gz
+    fgrep -v "#" plink2.vmiss \
+    | awk -v OFS="\t" '{ print $2, 1-$NF }' \
+    > callrates.txt
+    #Clean up VCF
     /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/filter_cleanup_and_QUAL_recalibration.py \
+      --callrate-table callrates.txt \
+      --min-callrate-global ${min_callrate_global} \
+      --min-callrate-smallDels ${min_callrate_smallDels} \
       input.vcf.gz \
-      ${PCRPLUS_samples_list} \
       stdout \
     | bgzip -c \
-    > "${prefix}.cleaned_filters_qual_recalibrated.vcf.gz"
+    > "${prefix}.${contig}.cleaned_filters_qual_recalibrated.vcf.gz"
     # tabix -p vcf -f "${prefix}.cleaned_filters_qual_recalibrated.vcf.gz"
   >>>
 
   output {
-    File out_vcf = "${prefix}.cleaned_filters_qual_recalibrated.vcf.gz"
+    File out_vcf = "${prefix}.${contig}.cleaned_filters_qual_recalibrated.vcf.gz"
     # File out_vcf_idx = "${prefix}.cleaned_filters_qual_recalibrated.vcf.gz.tbi"
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:112c926b786933690781a93a5c0153fc56568fe5f2e03722d067d5fd6c2bf046"
-    preemptible: 0
+    docker : "talkowski/sv-pipeline@sha256:4587376100d71d66fb864740f95e0cc5f343bb1fe6e892f5b8116c789c38333f"
+    preemptible: 1
+    maxRetries: 0
     disks: "local-disk 50 HDD"
     memory: "4 GB"
   }
 }
 
 
-#General task to combine multiple VCFs
-#NO SORT
+#General task to combine and sort multiple VCFs
 task concat_vcfs {
   Array[File] vcfs
   String outfile_prefix
 
   command <<<
+    set -euo pipefail
     vcf-concat ${sep=' ' vcfs} | bgzip -c > ${outfile_prefix}.vcf.gz; 
     tabix -p vcf -f "${outfile_prefix}.vcf.gz"
   >>>
@@ -93,9 +129,11 @@ task concat_vcfs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:5a5bb420b823b129a15ca49ac2e6d3862984c5dd1b8ec91a49ee1ba803685d83"
+    docker: "talkowski/sv-pipeline@sha256:4587376100d71d66fb864740f95e0cc5f343bb1fe6e892f5b8116c789c38333f"
     preemptible: 0
-    memory: "8 GB"
+    maxRetries: 1
+    memory: "4 GB"
+    bootDiskSizeGb: 30
     disks: "local-disk 250 HDD"
   }
 }

@@ -28,7 +28,7 @@ option_list <- list(
   make_option(c("--PCRPLUSsamples"), type="character", default=NULL,
               help="list of PCR+ samples [default %default]",
               metavar="character"),
-  make_option(c("--confidence"), type="numeric", default=0.85,
+  make_option(c("--confidence"), type="numeric", default=0.8,
               help="minimum probability for a sample to be assigned to a population [default %default]",
               metavar="numeric")
 )
@@ -62,7 +62,7 @@ confidence <- opts$confidence
 # OUTPREFIX <- "~/scratch/gnomAD_v2_SV_MASTER.PCA_test"
 # batch.assignments.in <- "~/scratch/gnomAD_v2_SV.sample_batch_assignments.txt"
 # PCRPLUS.samples.in <- "~/scratch/gnomAD_v2_SV_PCRPLUS.samples.list"
-# confidence <- 0.85
+# confidence <- 0.8
 
 
 
@@ -83,6 +83,7 @@ rownames(grm) <- samples
 pop.train <- read.table(pop.train.in,header=F)
 colnames(pop.train) <- c("ID","pop")
 pop.train <- pop.train[which(pop.train$ID %in% rownames(grm)),]
+pop.train$pop[which(pop.train$pop=="SAS")] <- "."
 pop.train <- pop.train[which(pop.train$pop != "."),]
 pop.train$pop[which(pop.train$pop %in% c("ASJ","FIN","NFE"))] <- "EUR"
 pops <- unique(pop.train$pop)
@@ -97,7 +98,7 @@ names(pop.cols) <- pop.cols.df$pop
 # genofile <- snpgdsOpen("input.gds")
 
 #Run PCA
-pca <- princomp(grm)
+pca <- prcomp(grm, center=T, scale=F)
 
 # #Compute & plot variance explained
 # eigs <- pca$sdev^2
@@ -105,7 +106,7 @@ pca <- princomp(grm)
 # barplot(pct.explained[1:10])
 
 #Format PC matrix & write out to file
-pca.mat.all <- pca$scores
+pca.mat.all <- pca$x
 colnames(pca.mat.all) <- paste("PC",1:ncol(pca.mat.all),sep="")
 rownames(pca.mat.all) <- samples
 pca.mat.out <- data.frame(samples,pca.mat.all[,1:100])

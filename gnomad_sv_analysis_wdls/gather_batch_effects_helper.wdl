@@ -58,17 +58,18 @@ task shard_table {
   Int variants_per_shard
 
   command <<<
+    set -euo pipefail
     #Split variant lines
     zcat ${freq_table} | sed '1d' | \
-    split -l ${variants_per_shard} --numeric-suffixes=00001 -a 5 /dev/stdin freq_table_shard_
+    split -l ${variants_per_shard} --numeric-suffixes=00001 -a 5 /dev/stdin freq_table_shard_ || true
     #Add header & gzip each shard
     zcat ${freq_table} | sed -n '1p' > header.txt
     maxshard=$( find / -name "freq_table_shard_*" | awk -v FS="_" '{ print $NF }' \
-                | sort -Vrk1,1 | sed -n '1p' )
+                | sort -Vrk1,1 | sed -n '1p' || true )
     for i in $( seq -w 00001 "$maxshard" ); do
       cat header.txt "freq_table_shard_$i" \
       | gzip -c \
-      > "freq_table_shard_$i.txt.gz"
+      > "freq_table_shard_$i.txt.gz" || true
     done
   >>>
 
@@ -77,8 +78,9 @@ task shard_table {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:f4c9f6d94237f25908c0f51bfaffcab7d4189d19379e71cfb3b0582377a0c75a"
+    docker : "talkowski/sv-pipeline@sha256:aef8156983cec6ac6a91fa6461b197a63835e5487fc9523ec857f947cfac660e"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -91,6 +93,7 @@ task compare_batches {
   String prefix
 
   command <<<
+    set -euo pipefail
     /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/find_batch_effects.shard_helper.R \
       ${freq_table} \
       "${batch1}" \
@@ -104,9 +107,10 @@ task compare_batches {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:25eebd3a2dfeaaf94fbfa85b30ecbbeeafb92633edcefa93b178c053317fcd8b"
+    docker : "talkowski/sv-pipeline@sha256:aef8156983cec6ac6a91fa6461b197a63835e5487fc9523ec857f947cfac660e"
     memory: "4 GB"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -119,15 +123,16 @@ task combine_shards {
   String prefix
   
   command <<<
+    set -euo pipefail
     #Write header
-    zcat ${freq_tables[0]} | sed -n '1p' > header.txt
+    zcat ${freq_tables[0]} | sed -n '1p' > header.txt || true
     #Iterate over files and cat
     while read file; do
       zcat "$file" | sed '1d'
     done < ${write_lines(freq_tables)} \
     | cat header.txt - \
     | gzip -c \
-    > "${prefix}.${batch1}_vs_${batch2}.AF_comparison_table.txt.gz"
+    > "${prefix}.${batch1}_vs_${batch2}.AF_comparison_table.txt.gz" || true
     #Analyze
     mkdir "${batch1}_vs_${batch2}"
     /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/find_batch_effects.R \
@@ -147,9 +152,10 @@ task combine_shards {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:25eebd3a2dfeaaf94fbfa85b30ecbbeeafb92633edcefa93b178c053317fcd8b"
+    docker : "talkowski/sv-pipeline@sha256:aef8156983cec6ac6a91fa6461b197a63835e5487fc9523ec857f947cfac660e"
     memory: "4 GB"
     preemptible: 1
+    maxRetries: 1
   }
 }
 

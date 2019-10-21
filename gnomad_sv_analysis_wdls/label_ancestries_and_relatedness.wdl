@@ -18,6 +18,11 @@ workflow get_ancestries_and_relatedness {
   File famfile
   File autosomes_list
   File trios_famfile
+  Float min_nonnull_gt_frac_forPCA
+  Float min_nonnull_gt_frac_forKING
+  Float min_maf_forPCA
+  Float min_maf_forKING
+  Int min_qual
   String prefix
 
   Array[Array[String]] contigs = read_tsv(autosomes_list)
@@ -29,7 +34,9 @@ workflow get_ancestries_and_relatedness {
         vcf=vcf,
         vcf_idx=vcf_idx,
         contig=contig[0],
-        min_maf=0.01,
+        min_maf=min_maf_forPCA,
+        min_qual=min_qual,
+        min_nonnull_gt_frac=min_nonnull_gt_frac_forPCA,
         prefix="${prefix}.${contig[0]}.filtered.common"
     }
   }
@@ -39,10 +46,12 @@ workflow get_ancestries_and_relatedness {
       outfile_prefix="${prefix}.filtered.common"
   }
 
-  #Compute GRM from filtered VCF of common variants only (for PCA)
+  #Compute LD-pruned GRM from filtered VCF of common variants only (for PCA)
   call createGRM {
     input:
       vcf=concat_prePCA_vcf.concat_vcf,
+      max_LD=0.2,
+      LD_prune_distance=1000,
       prefix=prefix
   }
 
@@ -63,7 +72,9 @@ workflow get_ancestries_and_relatedness {
         vcf=vcf,
         vcf_idx=vcf_idx,
         contig=contig[0],
-        min_maf=0.00015,
+        min_maf=min_maf_forKING,
+        min_qual=min_qual,
+        min_nonnull_gt_frac=min_nonnull_gt_frac_forKING,
         prefix="${prefix}.${contig[0]}.filtered.looser"
     }
   }
@@ -81,12 +92,19 @@ workflow get_ancestries_and_relatedness {
   }
 
   #Infer relatedness with KING
-  call infer_relateds {
+  call run_king {
     input:
       plink_bed=make_plink_files.plink_bed,
       plink_fam=make_plink_files.plink_fam,
       plink_bim=make_plink_files.plink_bim,
+      prefix=prefix
+  }
+  call infer_relateds {
+    input:
+      king_metrics_filtered=run_king.king_metrics_filtered,
+      king_metrics_all=run_king.king_metrics_all,
       trios_famfile=trios_famfile,
+      n_unrelated_pairs=10000,
       prefix=prefix
   }
 
@@ -104,6 +122,8 @@ task filter_vcf {
   File vcf_idx
   String contig
   Float min_maf
+  Float min_nonnull_gt_frac
+  Float min_qual
   String prefix
 
   command <<<
@@ -113,9 +133,11 @@ task filter_vcf {
       --chr ${contig} \
       --keep-filtered PASS \
       --remove-INFO PCRPLUS_DEPLETED \
-      --remove-INFO PESR_GT_OVERDISPERSION \
-      --max-missing 0.99 \
+      --remove-INFO UNSTABLE_AF_PCRPLUS \
+      --remove-INFO VARIABLE_ACROSS_BATCHES \
+      --max-missing ${min_nonnull_gt_frac} \
       --maf ${min_maf} \
+      --minQ ${min_qual} \
       --recode \
       --recode-INFO-all \
       --stdout \
@@ -128,8 +150,9 @@ task filter_vcf {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:25eebd3a2dfeaaf94fbfa85b30ecbbeeafb92633edcefa93b178c053317fcd8b"
+    docker: "talkowski/sv-pipeline@sha256:50875d61110ab2139f657c7fa1311fa9be9c7df11fe10c3ab08ecfd8e06e5250"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
     disks: "local-disk 250 HDD"
   }
@@ -152,8 +175,9 @@ task concat_vcfs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:25eebd3a2dfeaaf94fbfa85b30ecbbeeafb92633edcefa93b178c053317fcd8b"
+    docker: "talkowski/sv-pipeline@sha256:50875d61110ab2139f657c7fa1311fa9be9c7df11fe10c3ab08ecfd8e06e5250"
     preemptible: 0
+    maxRetries: 1
     memory: "8 GB"
     disks: "local-disk 250 HDD"
   }
@@ -163,11 +187,21 @@ task concat_vcfs {
 # Create genetic relatedness matrix (GRM) of allele dosage
 task createGRM {
   File vcf
+  Float max_LD
+  Float LD_prune_distance
   String prefix
 
   command <<<
+    # Prune input VCF on LD
+    bcftools +prune \
+      --max-LD ${max_LD} \
+      --window ${LD_prune_distance}kb \
+      -Oz \
+      -o "${prefix}.LD_pruned.vcf.gz" \
+      ${vcf}
+    # Then compute GRM
     /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/vcf2grm.py \
-      ${vcf} stdout \
+      "${prefix}.LD_pruned.vcf.gz" stdout \
       | bgzip -c \
       > "${prefix}.grm.txt.gz"
   >>>
@@ -177,8 +211,9 @@ task createGRM {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:25eebd3a2dfeaaf94fbfa85b30ecbbeeafb92633edcefa93b178c053317fcd8b"
+    docker: "talkowski/sv-pipeline@sha256:50875d61110ab2139f657c7fa1311fa9be9c7df11fe10c3ab08ecfd8e06e5250"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
     disks: "local-disk 50 HDD"
   }
@@ -199,7 +234,7 @@ task PCA_assign_pops {
       -p "./${prefix}_PCA_plots/${prefix}" \
       --batchAssignments ${sample_batch_assignments} \
       --PCRPLUSsamples ${PCRPLUS_samples_list} \
-      --confidence 0.85 \
+      --confidence 0.80 \
       ${GRM} \
       ${sample_pop_training_labels} \
       /opt/sv-pipeline/ref/gnomAD_population_colors.txt
@@ -223,9 +258,11 @@ task PCA_assign_pops {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:c2af5febc8967dff0b7a10cd764b292f43029ffd119e40832cef3fcbc3df1c1f"
+    docker: "talkowski/sv-pipeline@sha256:e644bde07541047bd1e89dfa38dca76e33a29d9ac66940e321207447a0537003"
     preemptible: 1
-    memory: "8 GB"
+    maxRetries: 1
+    memory: "32 GB"
+    bootDiskSizeGb: 30
     disks: "local-disk 100 HDD"
   }
 }
@@ -247,60 +284,107 @@ task make_plink_files {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:c2af5febc8967dff0b7a10cd764b292f43029ffd119e40832cef3fcbc3df1c1f"
+    docker: "talkowski/sv-pipeline@sha256:50875d61110ab2139f657c7fa1311fa9be9c7df11fe10c3ab08ecfd8e06e5250"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
     disks: "local-disk 30 HDD"
   }
 }
 
 
-# Infer relatedness between samples with KING
-task infer_relateds {
+# Run KING
+task run_king {
   File plink_bed
   File plink_fam
   File plink_bim
-  File trios_famfile
   String prefix
 
   command <<<
+    set -euo pipefail
     #Run KING
     king -b ${plink_bed} --fam ${plink_fam} --bim ${plink_bim} --related --degree 2
     #Clean output for all samples
     cut -f2-4,7-14 king.kin | gzip -c > ${prefix}.king_metrics.txt.gz
-    #Filter on HetConc > 0.25, IBD1Seg > 0.15, and Kinship > 0.05
+    # #Filter on HetConc > 0.2, IBS0 < 0.006, and Kinship > 0.1
     #Assumes all pairs not meeting these criteria are, at best, distant relatives
     zcat ${prefix}.king_metrics.txt.gz \
     | sed -n '1p' | sed 's/\t/\n/g' \
     | awk -v OFS="\t" '{ print $1, NR }' \
     > header_indexes.txt
-    HetConc_idx=$( fgrep HetConc header_indexes.txt | cut -f2 )
-    IBD1Seg_idx=$( fgrep IBD1Seg header_indexes.txt | cut -f2 )
+    HetConc_idx=$( fgrep -w HetConc header_indexes.txt | cut -f2 )
+    HetHet_idx=$( fgrep -w HetHet header_indexes.txt | cut -f2 )
+    IBS0_idx=$( fgrep -w IBS0 header_indexes.txt | cut -f2 )
     Kinship_idx=$( fgrep Kinship header_indexes.txt | cut -f2 )
     zcat ${prefix}.king_metrics.txt.gz \
     | awk -v OFS="\t" \
       -v HetConc="$HetConc_idx" \
-      -v IBD1Seg="$IBD1Seg_idx" \
+      -v HetHet="$HetHet_idx" \
+      -v IBS0="$IBS0_idx" \
       -v Kinship="$Kinship_idx" \
-      '{ if ($1=="ID1" || ($(HetConc)>0.25 && $(IBD1Seg)>0.15 && $(Kinship)>0.05)) print $0 }' \
+      '{ if ($1=="ID1" || ($(HetConc)>0.2 && $(IBS0)<0.006 $(Kinship)>0.1)) print $0 }' \
     | gzip -c \
     > ${prefix}.king_metrics.candidate_pairs_subsetted.txt.gz
+  >>>
+
+  output {
+    File king_metrics_all = "${prefix}.king_metrics.txt.gz"
+    File king_metrics_filtered = "${prefix}.king_metrics.candidate_pairs_subsetted.txt.gz"
+  }
+
+  runtime {
+    docker: "talkowski/sv-pipeline@sha256:ee412e454f2183d270698844a5e10149b97d919592a521b5ecbba65225ded9e4"
+    preemptible: 1
+    maxRetries: 1
+    memory: "32 GB"
+    disks: "local-disk 50 HDD"
+  }
+}
+
+
+# Infer relatedness between samples from KING output
+task infer_relateds {
+  File king_metrics_filtered
+  File king_metrics_all
+  File trios_famfile
+  Int n_unrelated_pairs
+  String prefix
+
+  command <<<
+    set -euo pipefail
+    # Select random pairs of samples not known to have any relatives to spike into SVM training
+    awk -v FS="\t" -v OFS="\n" '{ print $2, $3, $4 }' ${trios_famfile} \
+    > samples_in_families.txt
+    zcat ${king_metrics_all} \
+    | cut -f1,2 \
+    | fgrep -wvf samples_in_families.txt \
+    | shuf --random-source=${king_metrics_all} \
+    | head -n ${n_unrelated_pairs} \
+    > unrelated_sample_pairs.supplement.txt || true
     #Parse KING results and determine which samples should be pruned
     /opt/sv-pipeline/scripts/downstream_analysis_and_filtering/parse_KING_results.R \
       -p ${prefix} \
-      ${prefix}.king_metrics.candidate_pairs_subsetted.txt.gz \
+      -u unrelated_sample_pairs.supplement.txt \
+      ${king_metrics_filtered} \
       ${trios_famfile}
+    #Tarball all king plots
+    mkdir ${prefix}_KING_plots
+    mv *.pdf ${prefix}_KING_plots/
+    tar -czvf ${prefix}_KING_plots.tar.gz ${prefix}_KING_plots
   >>>
 
   output {
     File related_samples_to_prune = "${prefix}.related_samles_to_prune.txt"
     File inferred_relationships = "${prefix}.inferred_pairwise_relationships.txt.gz"
     File KING_inference_accuracy = "${prefix}.relationship_inference_accuracy.txt"
+    File KING_plots = "${prefix}_KING_plots.tar.gz"
+    File unrelated_sample_supplement = "unrelated_sample_pairs.supplement.txt"
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:64d98e5d6f85d34ba14a32aa615d69cfe303df9c952bdfeb86ca0d7737856e41"
+    docker: "talkowski/sv-pipeline@sha256:ee412e454f2183d270698844a5e10149b97d919592a521b5ecbba65225ded9e4"
     preemptible: 1
+    maxRetries: 1
     memory: "32 GB"
     disks: "local-disk 50 HDD"
   }

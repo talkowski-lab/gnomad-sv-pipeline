@@ -27,26 +27,26 @@ workflow Clean {
 
 
 task cleanvcf2 {
-	
+  
   File normal_revise_vcf
   File whitelist
   File multi_cnvs
   File vcftools_idx
 
   command {
-    	bash /opt/sv-pipeline/04_variant_resolution/scripts/clean_vcf_part2.sh ${normal_revise_vcf} ${whitelist} ${multi_cnvs} "output.txt"
+      bash /opt/sv-pipeline/04_variant_resolution/scripts/clean_vcf_part2.sh ${normal_revise_vcf} ${whitelist} ${multi_cnvs} "output.txt"
   }
 
   runtime {
     preemptible: 1
-    docker : "talkowski/sv-pipeline@sha256:a21921b3517e9a10439188b48561f876bcb19bdf56bf21c44264b5bed09b0851"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     disks: "local-disk 250 SSD"
     bootDiskSizeGb: 30
-    memory: "16 GB"
+    memory: "32 GB"
   }
 
   output {
-		File out="output.txt"
+    File out="output.txt"
   }
 }
 
@@ -61,7 +61,7 @@ task combine {
   
   runtime {
     preemptible: 1
-    docker : "talkowski/sv-pipeline@sha256:facb963613f57bf6c70072c9356241e3ffe47c5d0550beaf9b21f805315846b0"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     disks: "local-disk 200 SSD"
     memory: "4 GB"
   }

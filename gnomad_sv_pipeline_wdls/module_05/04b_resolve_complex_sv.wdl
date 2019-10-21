@@ -107,6 +107,7 @@ task get_se_cutoff {
   File rf_cutoffs
 
   command <<<
+    set -eu -o pipefail
     mkdir rf_cutoff_files/
     cat ${rf_cutoffs} | gsutil cp -I rf_cutoff_files/
     while read file; do
@@ -122,8 +123,9 @@ task get_se_cutoff {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:40e6a9e956302d32137d0c4a2f33779d23a70ea603d88a8ec03653090bb70107"
+    docker: "talkowski/sv-pipeline@sha256:5e3bb0299d130a3337038f6e8dd8a610d41db64d2dc24e44263f7bf7b57da30b"
     preemptible: 1
+    maxRetries: 1
   }
 }
 
@@ -138,6 +140,7 @@ task shard_vcf {
   String inv_only
 
   command <<<
+    set -e
     if [ ${inv_only} == "TRUE" ]; then
       /opt/sv-pipeline/04_variant_resolution/scripts/shardVCF_preResolveCPX_invOnly_part1.sh \
       -L ${min_variants_per_shard} \
@@ -158,11 +161,14 @@ task shard_vcf {
   output {
     Array[File] VID_lists = glob("*.VIDs.list")
   }
+
   
   runtime {
     preemptible: 1
-    docker: "talkowski/sv-pipeline@sha256:ca76dffed573c9c792b8362e594bae23b830045d7ce8585bc90202bdcfe4e9a4"
-    disks: "local-disk 500 SSD"
+    maxRetries: 1
+    docker: "talkowski/sv-pipeline@sha256:36a020e39c3f2727b416ce0d9eef451d9f1316611eb6d7440a21fb1444d0e097"
+    bootDiskSizeGb: "30"
+    disks: "local-disk 150 SSD"
   }
 }
 
@@ -176,6 +182,7 @@ task resolve_prep {
   File svc_acct_key
 
   command <<<
+    set -eu -o pipefail
     #First, subset VCF to variants of interest
     zcat ${vcf} | sed -n '1,1000p' | fgrep "#" > header.vcf
     zcat ${vcf} | fgrep -v "#" | fgrep -wf ${VIDs_list} | cat header.vcf - | bgzip -c \
@@ -189,24 +196,29 @@ task resolve_prep {
       > noref.vcf.gz
     #Third, use remote tabix to pull down the discfile chunks within ±2kb of all
     # INVERSION breakpoints, and bgzip / tabix
-    echo "LOCALIZING ALL DISCFILE SHARDS..."
-    fgrep -v "#" input.bed | fgrep INV | awk -v OFS="\t" -v buffer=2000 \
-    '{ print $1, $2-buffer, $2+buffer"\n"$1, $3-buffer, $3+buffer }' \
-    | awk -v OFS="\t" '{ if ($2<1) $2=1; print $1, $2, $3 }' \
-    | sort -Vk1,1 -k2,2n -k3,3n \
-    | bedtools merge -i - \
-    > regions_to_tabix.bed
-    while read gs_path; do
-      gsutil signurl -d 24h ${svc_acct_key} $gs_path | sed '1d' | cut -f 4;
-    done < ${write_tsv(discfiles)} > signed_URLs.list
-    paste signed_URLs.list ${write_tsv(discfile_idxs)} \
-    | awk -v OFS="\t" '{ print $1, $2, "disc"NR"shard" }' > discfiles.list;
-    while read url idx slice; do
-      echo "REMOTE TABIXING $slice..."
-      svtk remote-tabix -R regions_to_tabix.bed "$url" "$idx" \
-      | awk '{ if ($1==$4 && $3==$6) print }' \
-      | bgzip -c > $slice.txt.gz
-    done < discfiles.list;
+    touch disctestshard.txt
+    bgzip disctestshard.txt
+    if fgrep INV input.bed
+  then
+      echo "LOCALIZING ALL DISCFILE SHARDS..."
+      fgrep -v "#" input.bed | fgrep INV | awk -v OFS="\t" -v buffer=2000 \
+      '{ print $1, $2-buffer, $2+buffer"\n"$1, $3-buffer, $3+buffer }' \
+      | awk -v OFS="\t" '{ if ($2<1) $2=1; print $1, $2, $3 }' \
+      | sort -Vk1,1 -k2,2n -k3,3n \
+      | bedtools merge -i - \
+      > regions_to_tabix.bed
+      while read gs_path; do
+        gsutil signurl -d 24h ${svc_acct_key} $gs_path | sed '1d' | cut -f 4;
+      done < ${write_tsv(discfiles)} > signed_URLs.list
+      paste signed_URLs.list ${write_tsv(discfile_idxs)} \
+      | awk -v OFS="\t" '{ print $1, $2, "disc"NR"shard" }' > discfiles.list;
+      while read url idx slice; do
+        echo "REMOTE TABIXING $slice..."
+        svtk remote-tabix -R regions_to_tabix.bed "$url" "$idx" \
+        | awk '{ if ($1==$4 && $3==$6) print }' \
+        | bgzip -c > $slice.txt.gz
+      done < discfiles.list;
+    fi
     #Fourth, merge PE files and add one artificial pair corresponding to the chromosome of interest
     #This makes it so that svtk doesn't break downstream
     zcat disc*shard.txt.gz \
@@ -227,10 +239,11 @@ task resolve_prep {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline-remote-pysam@sha256:76966a6d63b99d98e74eed9b8efb42dd40bcb125c31d22fda679beee801b732d"
+    docker: "talkowski/sv-pipeline-remote-pysam@sha256:f31cdc50a6616f19cd4bd976b4458e186b194b166f0abcbda4ecfad0e006cf7a"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
-    disks: "local-disk 100 SSD"
+    disks: "local-disk 100 HDD"
   }
 }
 
@@ -250,17 +263,26 @@ task svtk_resolve {
   File merged_discfile_idx
 
   command <<<
+    set -e
     #Run svtk resolve on variants after all-ref exclusion
-    svtk resolve \
-      ${noref_vcf} \
-      all_batches.resolved.${chrom}.shard.vcf \
-      -p AllBatches_CPX_${chrom} \
-      -u all_batches.unresolved.${chrom}.shard.vcf \
-      --discfile ${merged_discfile} \
-      --mei-bed ${mei_bed} \
-      --cytobands ${cytobands} \
-      --min-rescan-pe-support ${se_pe_cutoff} \
-      -x ${pe_blacklist};
+    if [ $( zcat ${noref_vcf} | cut -f1 | fgrep -v "#" | wc -l ) -gt 0 ]; then
+      svtk resolve \
+        ${noref_vcf} \
+        all_batches.resolved.${chrom}.shard.vcf \
+        -p AllBatches_CPX_${chrom} \
+        -u all_batches.unresolved.${chrom}.shard.vcf \
+        --discfile ${merged_discfile} \
+        --mei-bed ${mei_bed} \
+        --cytobands ${cytobands} \
+        --min-rescan-pe-support ${se_pe_cutoff} \
+        -x ${pe_blacklist};
+      echo "svtk resolve complete"
+    else
+      echo "no records in noref.vcf.gz; skipping svtk resolve"
+      zcat ${noref_vcf} > all_batches.resolved.${chrom}.shard.vcf
+      zcat ${noref_vcf} > all_batches.unresolved.${chrom}.shard.vcf
+    fi
+
     #Add all-ref variants back into resolved VCF
     #Note: requires modifying the INFO field with sed & awk given pysam C bug
     zcat ${full_vcf} | fgrep -v "#" | fgrep -wvf ${noref_vids} \
@@ -268,15 +290,21 @@ task svtk_resolve {
       | awk -v OFS="\t" '{ $8=$8";MEMBERS="$3; print }' \
       | cat all_batches.resolved.${chrom}.shard.vcf - \
       | vcf-sort \
-      > all_batches.resolved.${chrom}.shard.vcf2
+      > all_batches.resolved.${chrom}.shard.vcf2 || true
     mv all_batches.resolved.${chrom}.shard.vcf2 \
       all_batches.resolved.${chrom}.shard.vcf; 
+
+    echo "all-ref variants added back into resolved vcf"
+
     #Sanity check for failed svtk jobs
     if [ $( fgrep -v "#" all_batches.resolved.${chrom}.shard.vcf | wc -l ) -eq 0 ] && \
        [ $( fgrep -v "#" all_batches.unresolved.${chrom}.shard.vcf | wc -l ) -eq 0 ]; then
       print "ERROR: BOTH OUTPUT VCFS EMPTY"
       exit 0
     fi
+    
+    echo "passed sanity check, bgzipping vcfs"
+
     bgzip -f all_batches.resolved.${chrom}.shard.vcf; 
     bgzip -f all_batches.unresolved.${chrom}.shard.vcf
   >>>
@@ -287,10 +315,12 @@ task svtk_resolve {
   }  
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:24c91e6eadac380ed4d1ce284e6cedfcc6ac082645e2d1e9e04079795c1d717a"
+    docker: "talkowski/sv-pipeline@sha256:5e3bb0299d130a3337038f6e8dd8a610d41db64d2dc24e44263f7bf7b57da30b"
     preemptible: 1
-    memory: "16 GB"
-    disks: "local-disk 30 SSD"
+    maxRetries: 1
+    memory: "32 GB"
+    bootDiskSizeGb: "30"
+    disks: "local-disk 100 SSD"
   }
 }
 
@@ -301,6 +331,7 @@ task restore_unresolved_cnv {
   String chrom
 
   command <<<
+    set -e
     #Add unresolved CNVs to resolved VCF and wipe unresolved status
     zcat ${unresolved_vcf} \
       | fgrep -e "<DEL>" -e "<DUP>" -e "SVTYPE=DEL" -e "SVTYPE=DUP" -e "SVTYPE=CNV" -e "SVTYPE=MCNV" \
@@ -308,7 +339,7 @@ task restore_unresolved_cnv {
       | sed -r -e 's/;UNRESOLVED_TYPE[^;]*;/;/g' -e 's/;UNRESOLVED_TYPE[^\t]*\t/\t/g' \
       | cat <( zcat ${resolved_vcf} ) - \
       > all_batches.resolved_plus_cnv.${chrom}.vcf
-
+    set +e
     #Add other unresolved variants & retain unresolved status (except for inversion single enders)
     zcat ${unresolved_vcf} \
       | fgrep -v -e "<DEL>" -e "<DUP>" -e "SVTYPE=DEL" -e "SVTYPE=DUP" -e "SVTYPE=CNV" -e "SVTYPE=MCNV" \
@@ -323,7 +354,7 @@ task restore_unresolved_cnv {
       | fgrep -v "#" \
       | sed -e 's/SVTYPE=INV/SVTYPE=BND/g' \
       >> all_batches.resolved_plus_cnv.${chrom}.vcf
-
+    set -e
     #Sort, clean, and compress
     cat all_batches.resolved_plus_cnv.${chrom}.vcf \
       | vcf-sort -c \
@@ -338,9 +369,10 @@ task restore_unresolved_cnv {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:40e6a9e956302d32137d0c4a2f33779d23a70ea603d88a8ec03653090bb70107"
+    docker: "talkowski/sv-pipeline@sha256:5e3bb0299d130a3337038f6e8dd8a610d41db64d2dc24e44263f7bf7b57da30b"
     preemptible: 1
-    disks: "local-disk 100 SSD"
+    maxRetries: 1
+    disks: "local-disk 50 SSD"
   }
 }
 
@@ -351,6 +383,7 @@ task concat_vcfs {
   String prefix
 
   command <<<
+    set -euo pipefail
     vcf-concat ${sep=' ' vcfs} | vcf-sort -c | bgzip -c > ${prefix}.${vcftype}.vcf.gz
     tabix -p vcf -f ${prefix}.${vcftype}.vcf.gz
   >>>
@@ -361,8 +394,9 @@ task concat_vcfs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:40e6a9e956302d32137d0c4a2f33779d23a70ea603d88a8ec03653090bb70107"
+    docker: "talkowski/sv-pipeline@sha256:5e3bb0299d130a3337038f6e8dd8a610d41db64d2dc24e44263f7bf7b57da30b"
     preemptible: 1
+    maxRetries: 1
     disks: "local-disk 250 SSD"
   }
 }

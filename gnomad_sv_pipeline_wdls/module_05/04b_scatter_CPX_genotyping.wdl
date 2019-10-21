@@ -1,4 +1,4 @@
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:04b_genotype_CPX_CNVs/versions/12/plain-WDL/descriptor" as cpx_gt
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:04b_genotype_CPX_CNVs/versions/25/plain-WDL/descriptor" as cpx_gt
 
 # Copyright (c) 2018 Talkowski Lab
 
@@ -11,6 +11,7 @@ import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:04b_genotype_CPX_C
 # across batches on predicted CPX CNVs from 04b
 workflow scatter_CPX_genotyping {
   File vcf
+  File vcf_idx
   Int n_master_vcf_shards
   Int n_master_min_vars_per_vcf_shard
   File gt_input_files
@@ -26,6 +27,7 @@ workflow scatter_CPX_genotyping {
   call shard_vcf {
     input:
       vcf=vcf,
+      vcf_idx=vcf_idx,
       prefix="${prefix}.${contig}",
       n_shards=n_master_vcf_shards,
       min_vars_per_shard=n_master_min_vars_per_vcf_shard
@@ -63,28 +65,34 @@ workflow scatter_CPX_genotyping {
  }
 
 
-
-
 #Shard a vcf into even chunks
 task shard_vcf {
   File vcf
+  File vcf_idx
   String prefix
   Int n_shards
   Int min_vars_per_shard
 
   command <<<
-    zcat ${vcf} | sed -n '1,1000p' | fgrep "#" > header.vcf;
-    nrecords=$( zcat ${vcf} | cut -f1 | fgrep -v "#" | wc -l );
+    tabix -H ${vcf} > header.vcf;
+    zcat ${vcf} | grep -ve '^#' | cut -f3 > all_VIDs.list;
+    nrecords=$( cat all_VIDs.list | wc -l );
     rec_per_shard=$( echo "$(( $nrecords / ${n_shards} ))" | cut -f1 -d\. );
     if [ $rec_per_shard -lt ${min_vars_per_shard} ]; then
       rec_per_shard=${min_vars_per_shard}
     fi;
-    zcat ${vcf} | fgrep -v "#" \
-    | split -l $rec_per_shard --numeric-suffixes=001 -a 3 /dev/stdin vcf_records_ ;
-    max_suf=$( find `pwd` -name "vcf_records_*" | awk -v FS="_" '{ print $NF }' | sort -nrk1,1 | sed -n '1p' )
-    for i in $( seq -w 001 "$max_suf" ); do
-      cat header.vcf vcf_records_"$i" | bgzip -c > ${prefix}.shard_"$i".vcf.gz
-      rm vcf_records_"$i"
+    /opt/sv-pipeline/04_variant_resolution/scripts/evenSplitter.R \
+      -L $rec_per_shard \
+      all_VIDs.list \
+      VIDs_split_
+    max_suf=$( find `pwd` -name "VIDs_split_*" | awk -v FS="_" '{ print $NF }' | sort -nrk1,1 | sed -n '1p' )
+    for i in $( seq 1 "$max_suf" ); do
+      zcat ${vcf} \
+      | fgrep -wf VIDs_split_"$i" \
+      | cat header.vcf - \
+      | bgzip -c \
+      > ${prefix}.shard_"$i".vcf.gz
+      rm VIDs_split_"$i"
     done
   >>>
 
@@ -93,8 +101,9 @@ task shard_vcf {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:c2af5febc8967dff0b7a10cd764b292f43029ffd119e40832cef3fcbc3df1c1f"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
     disks: "local-disk 500 HDD"
   }
@@ -117,8 +126,9 @@ task concat_vcfs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:c2af5febc8967dff0b7a10cd764b292f43029ffd119e40832cef3fcbc3df1c1f"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
     disks: "local-disk 500 HDD"
   }

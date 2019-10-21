@@ -10,11 +10,30 @@ Extract trio allele counts & GQs for all variants in a vcf
 
 import argparse
 import sys
+import csv
 from collections import defaultdict
 import pysam
 
 
-def gather_info(vcf, fout, pro, fa, mo, no_header = False):
+def read_ac_adj(infile, pro, fa, mo):
+    """
+    Read --ac-adj tsv into dictionary
+    """
+
+    ac_adj = {}
+
+    with open(infile) as tsvin:
+        reader = csv.reader(tsvin, delimiter='\t')
+        for vid, ac_pro, ac_fa, ac_mo in reader:
+            if vid not in ac_adj.keys():
+                acs = [ac_pro, ac_fa, ac_mo]
+                acs = [str(i) for i in acs]
+                ac_adj[vid] = acs
+
+    return ac_adj
+
+
+def gather_info(vcf, fout, pro, fa, mo, ac_adj = None, no_header = False):
     GTs_to_skip = './. None/None 0/None None/0'.split()
     sex_chroms = 'X Y chrX chrY'.split()
 
@@ -24,6 +43,11 @@ def gather_info(vcf, fout, pro, fa, mo, no_header = False):
         fout.write(header)
 
     trio_samples = [pro, fa, mo]
+
+    if ac_adj is not None:
+        vids_to_correct = ac_adj.keys()
+    else:
+        vids_to_correct = []
 
     for record in vcf:
         # #Do not include UNRESOLVED variants
@@ -65,6 +89,18 @@ def gather_info(vcf, fout, pro, fa, mo, no_header = False):
         #Convert to ACs
         ACs = [get_AC(g) for g in GTs]
 
+        # Overwrite ACs, if optioned
+        if record.id in vids_to_correct:
+            oldACs = ACs
+            newACs = ac_adj[record.id]
+            for i in [0, 1, 2]:
+                ACs[i] = str(max([int(ACs[i]), int(newACs[i])]))
+            # oldACs_str = '(' + ', '.join(oldACs) + ')'
+            # newACs_str = '(' + ', '.join(ACs) + ')'
+            # print('Overwriting ACs for {0} from {1} to {2}\n'.format(record.id,
+            #                                                          oldACs_str,
+            #                                                          newACs_str))
+
         #Get genotype qualities for trio
         GQs = [record.samples[ID]['GQ'] for ID in trio_samples]
 
@@ -79,7 +115,10 @@ def gather_info(vcf, fout, pro, fa, mo, no_header = False):
         #Get minimal variant info
         vid = record.id
         size = str(record.info['SVLEN'])
-        freq = str(record.info['AF'][0])
+        if 'AF' in record.info.keys():
+            freq = str(record.info['AF'][0])
+        else:
+            freq = 'NA'
         svtype = record.info['SVTYPE']
         filt = ','.join([f for f in record.filter])
         pro_ev = record.samples[trio_samples[0]]['EV']
@@ -116,8 +155,10 @@ def main():
     parser.add_argument('pro', help='Proband sample ID.')
     parser.add_argument('fa', help='Father sample ID.')
     parser.add_argument('mo', help='Mother sample ID.')
+    parser.add_argument('--ac-adj', help='tsv with variant IDs and ' +
+                        'pro/fa/mo AC to be manually overwritten.')
     parser.add_argument('--no-header', help='Do not write header line.',
-                        action = 'store_true', default = False)
+                        action='store_true', default=False)
 
     args = parser.parse_args()
 
@@ -131,7 +172,12 @@ def main():
     else:
         fout = open(args.fout, 'w')
 
-    gather_info(vcf, fout, args.pro, args.fa, args.mo, no_header = args.no_header)
+    if args.ac_adj is not None:
+        ac_adj = read_ac_adj(args.ac_adj, args.pro, args.fa, args.mo)
+    else:
+        ac_adj = None
+
+    gather_info(vcf, fout, args.pro, args.fa, args.mo, ac_adj, args.no_header)
 
     fout.close()
 

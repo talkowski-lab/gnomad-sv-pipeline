@@ -38,7 +38,7 @@ task cleanvcf4 {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:facb963613f57bf6c70072c9356241e3ffe47c5d0550beaf9b21f805315846b0"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     disks: "local-disk 200 SSD"
     memory: "16 GB"
   }
@@ -59,7 +59,7 @@ task combine {
 
   runtime {
     preemptible: 1
-    docker : "talkowski/sv-pipeline@sha256:facb963613f57bf6c70072c9356241e3ffe47c5d0550beaf9b21f805315846b0"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     disks: "local-disk 250 SSD"
     memory: "8 GB"
   }

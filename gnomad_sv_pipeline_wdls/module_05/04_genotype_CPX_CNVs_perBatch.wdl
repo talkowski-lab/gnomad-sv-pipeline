@@ -83,20 +83,30 @@ task shard_bed {
   File sampleslist
 
   command <<<
-    #First, repace samples in input bed with full list of all samples in batch
-    zcat ${bed} \
-      | awk -v OFS="\t" -v samples=$( cat ${sampleslist} | paste -s -d, ) \
-        '{ print $1, $2, $3, $4, samples, $6 }' \
-      | sort -Vk1,1 -k2,2n -k3,3n \
-      | bgzip -c \
-      > newBed_wSamples.bed.gz;
-    #Second, split by small vs large CNVs
-    zcat newBed_wSamples.bed.gz \
-      | awk -v OFS="\t" '($3-$2<5000) {print $0}' \
-      | split -l ${n_per_split_small} -a 6 - lt5kb.;
-    zcat newBed_wSamples.bed.gz \
-      | awk -v OFS="\t" '($3-$2>=5000) {print $0}' \
-      | split -l ${n_per_split_large} -a 6 - gt5kb.;
+    set -euo pipefail
+    if [ $( zcat ${bed} | fgrep -v "#" | wc -l ) -gt 0 ]; then
+      #First, repace samples in input bed with full list of all samples in batch
+      zcat ${bed} \
+        | fgrep -v "#" \
+        | awk -v OFS="\t" -v samples=$( cat ${sampleslist} | paste -s -d, ) \
+          '{ print $1, $2, $3, $4, samples, "DUP" }' \
+        | sort -Vk1,1 -k2,2n -k3,3n \
+        | bgzip -c \
+        > newBed_wSamples.bed.gz || true
+      #Second, split by small vs large CNVs
+      zcat newBed_wSamples.bed.gz \
+        | awk -v OFS="\t" '($3-$2<5000) {print $0}' \
+        | split -l ${n_per_split_small} -a 6 - lt5kb. || true
+      zcat newBed_wSamples.bed.gz \
+        | awk -v OFS="\t" '($3-$2>=5000) {print $0}' \
+        | split -l ${n_per_split_large} -a 6 - gt5kb. || true
+    fi
+    if [ $( find ./ -name "lt5kb.*" | wc -l ) -eq 0 ]; then
+      touch lt5kb.aaaaaa
+    fi
+    if [ $( find ./ -name "gt5kb.*" | wc -l ) -eq 0 ]; then
+      touch gt5kb.aaaaaa
+    fi
   >>>
 
   output {
@@ -106,8 +116,9 @@ task shard_bed {
     
   runtime {
     preemptible: 3
-    docker: "talkowski/sv-pipeline@sha256:90b8ece148558a26c7511c71839a5dddd514794cae6f7622f3bb4d8503c2294b"
-    disks: "local-disk 100 HDD"
+    maxRetries: 1
+    docker: "talkowski/sv-pipeline@sha256:5ff4bd3264cc61fc69e37cd2e307e3b5ab8458fec2606e1b57d4b1f73fecead0"
+    disks: "local-disk 50 HDD"
   }
 }
 
@@ -126,7 +137,12 @@ task RdTest_genotype {
   String prefix
 
   command <<<
-    /opt/RdTest/localize_bincov.sh ${bed} ${coveragefile} ${coveragefile_idx} ${svc_acct_key};
+    set -euo pipefail
+    /opt/RdTest/localize_bincov.sh \
+      ${bed} \
+      ${coveragefile} \
+      ${coveragefile_idx} \
+      ${svc_acct_key};
     Rscript /opt/RdTest/RdTest.R \
       -b ${bed} \
       -c local_coverage.bed.gz \
@@ -138,7 +154,10 @@ task RdTest_genotype {
       -r ${gt_cutoffs} \
       -y /opt/RdTest/bin_exclude.bed.gz \
       -g TRUE;
-    /opt/sv-pipeline/04_variant_resolution/scripts/merge_RdTest_genotypes.py ${prefix}.geno ${prefix}.gq rd.geno.cnv.bed;
+    /opt/sv-pipeline/04_variant_resolution/scripts/merge_RdTest_genotypes.py \
+      ${prefix}.geno \
+      ${prefix}.gq \
+      rd.geno.cnv.bed;
     sort -k1,1V -k2,2n rd.geno.cnv.bed | uniq | bgzip -c > rd.geno.cnv.bed.gz
   >>>
 
@@ -152,9 +171,12 @@ task RdTest_genotype {
   }
 
   runtime {
-      preemptible: 3
-      docker: "talkowski/sv-pipeline-rdtest@sha256:a7c85ef3b4196c22ad85464482de3a528e9262682a3e31da6d802a11f7175b2b"
-      disks: "local-disk 100 HDD"
+    preemptible: 3
+    docker: "talkowski/sv-pipeline-rdtest@sha256:0393ca5260e523f8646a72a2a739863384de73670383d3f0b32c6ccceba010e8"
+    disks: "local-disk 100 HDD"
+    bootDiskSizeGb: "30"
+    memory: "8 GB"
+    maxRetries: 1
   }
 }
 
@@ -177,8 +199,9 @@ task concat_melted_genotypes {
   }
   
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:90b8ece148558a26c7511c71839a5dddd514794cae6f7622f3bb4d8503c2294b"
+    docker: "talkowski/sv-pipeline@sha256:5ff4bd3264cc61fc69e37cd2e307e3b5ab8458fec2606e1b57d4b1f73fecead0"
     preemptible: 3
+    maxRetries: 1
     memory: "16 GB"
     disks: "local-disk 250 HDD"
   }

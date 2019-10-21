@@ -12,6 +12,7 @@ workflow getAFs_singleChrom {
 	String prefix
   File? sample_pop_assignments  #Two-column file with sample ID & pop assignment. "." for pop will ignore sample
   File? famfile                 #Used for M/F AF calculations
+  String? drop_empty_records
 
 
   # Tabix to chromosome of interest, and shard input VCF for stats collection
@@ -39,7 +40,8 @@ workflow getAFs_singleChrom {
   call combine_sharded_vcfs {
     input:
       vcfs=compute_shard_AFs.shard_wAFs,
-      prefix="${prefix}.${contig}"
+      prefix="${prefix}.${contig}",
+      drop_empty_records=drop_empty_records
   }
 
   # Final output
@@ -58,6 +60,7 @@ task shard_vcf {
   Int sv_per_shard
 
   command {
+    set -euo pipefail
     #Tabix chromosome of interest
     tabix -h ${vcf} ${contig} | bgzip -c > ${contig}.vcf.gz
     #Then shard VCF
@@ -73,7 +76,8 @@ task shard_vcf {
   
   runtime {
     preemptible: 1
-    docker: "talkowski/sv-pipeline@sha256:ef7584fc2cd354567d98b7f0d8ba4c83ac79f73a8c337ebaf765f8ff008c274c"
+    maxRetries: 1
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
     memory: "4 GB"
     disks: "local-disk 250 SSD"
   }
@@ -89,6 +93,7 @@ task compute_shard_AFs {
 
 
   command <<<
+    set -euo pipefail
     optionals=" "
     if [ ${default="SKIP" sample_pop_assignments} != "SKIP" ]; then
       optionals="$( echo "$optionals" ) -p ${sample_pop_assignments}"
@@ -109,8 +114,9 @@ task compute_shard_AFs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:831595263ca60288fa8512602d1a3f1fcc23c3f31a6a8f0db2e597138b5e3d36"
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
     disks: "local-disk 20 SSD"
   }
@@ -121,22 +127,30 @@ task compute_shard_AFs {
 task combine_sharded_vcfs {
   Array[File] vcfs
   String prefix
+  String? drop_empty_records
   
   command {
+    set -euo pipefail
     vcf-concat ${sep=" " vcfs} \
     | vcf-sort \
-    > merged.vcf;
-    /opt/sv-pipeline/05_annotation/scripts/prune_allref_records.py \
-      merged.vcf stdout \
-    | bgzip -c \
-    > "${prefix}.wAFs.vcf.gz";
+    > merged.vcf
+    if [ ${default="TRUE" drop_empty_records} == "TRUE" ]; then
+      /opt/sv-pipeline/05_annotation/scripts/prune_allref_records.py \
+        merged.vcf stdout \
+      | bgzip -c \
+      > "${prefix}.wAFs.vcf.gz"
+    else
+      cat merged.vcf | bgzip -c > "${prefix}.wAFs.vcf.gz"
+    fi
     tabix -p vcf "${prefix}.wAFs.vcf.gz"
   }
 
   runtime {
     preemptible: 1
-    docker: "talkowski/sv-pipeline@sha256:0ff872e5e0709e5192a1fbf3aed818cb7fa91d9727af8346214068f16f56a61f"
-    disks: "local-disk 50 SSD"
+    maxRetries: 1
+    docker: "talkowski/sv-pipeline@sha256:193d18c26100fdd603c569346722513f5796685e990ec3abcaeb4be887062a1a"
+    disks: "local-disk 250 SSD"
+    bootDiskSizeGb: 30
     memory: "4 GB"
   }
 

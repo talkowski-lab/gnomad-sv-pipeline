@@ -1,11 +1,12 @@
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:05_CleanVCF2/versions/31/plain-WDL/descriptor" as Clean2
-import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:05_CleanVCF3/versions/20/plain-WDL/descriptor" as clean4
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:05_CleanVCF2/versions/35/plain-WDL/descriptor" as Clean2
+import "https://api.firecloud.org/ga4gh/v1/tools/Talkowski-SV:05_CleanVCF3/versions/23/plain-WDL/descriptor" as clean4
 
 workflow CleanVCF {
 
   File vcf
   String Chr
   File backgroundlist
+  File bothsides_pass_list
   File famfile
   String prefix
   Int max_shards_per_chrom_step1
@@ -32,6 +33,7 @@ workflow CleanVCF {
       input:
         VCF=vcf_shard,
         Backgroundlist=backgroundlist,
+        bothsides_pass_list=bothsides_pass_list,
         Famfile=famfile
     }
   }
@@ -121,7 +123,7 @@ task subsetvcf {
 
   runtime {
   	preemptible: 1
-    docker : "talkowski/sv-pipeline@sha256:fa8d379e1b78a908a870e6e73f0cff7f46440e44930dcd16c9b37c3b9e562a80"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     disks: "local-disk 500 SSD"
     memory: "8 GB"
   }
@@ -160,8 +162,9 @@ task shard_vcf {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:fa8d379e1b78a908a870e6e73f0cff7f46440e44930dcd16c9b37c3b9e562a80"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
     disks: "local-disk 500 SSD"
   }
@@ -173,17 +176,27 @@ task cleanvcf1a {
 
 	File VCF
   File Backgroundlist
+  File bothsides_pass_list
   File Famfile
 
   command {
-  	bash /opt/sv-pipeline/04_variant_resolution/scripts/clean_vcf_part1.sh ${VCF} ${Backgroundlist} ${Famfile}
+  	bash /opt/sv-pipeline/04_variant_resolution/scripts/clean_vcf_part1.sh \
+           ${VCF} \
+           ${Backgroundlist} \
+           ${Famfile}
+    /opt/sv-pipeline/04_variant_resolution/scripts/add_bothsides_support_filter.py \
+      --bgzip \
+      --outfile int.w_bothsides.vcf.gz \
+      int.vcf.gz \
+      ${bothsides_pass_list}
   }
   
   runtime {
     preemptible: 1
-    docker : "talkowski/sv-pipeline@sha256:956645f01f2d6ab22ce746029d49e8f9b38b8cdb8252151c81f7647a9b466d7f"
+    docker: "talkowski/sv-pipeline@sha256:358b979a14d316639fa8b0a9b35edae40ce08470ac4eda8ed4abce9673b42e85"
     disks: "local-disk 30 HDD"
     memory: "4 GB"
+    maxRetries: 1
   }
 
   output {
@@ -192,7 +205,7 @@ task cleanvcf1a {
     # File Normal="normal.revise.vcf.gz"          #Moved to 1b
     File Whitelist="whitelist.txt"
     File Sex="sexchr.revise.txt"
-    File intermediate_vcf="int.vcf.gz"
+    File intermediate_vcf="int.w_bothsides.vcf.gz"
     # File FullVar="fullvar.afternormal.list.txt" #No longer needed
   }
 }
@@ -215,8 +228,9 @@ task combine_step1_outputs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:956645f01f2d6ab22ce746029d49e8f9b38b8cdb8252151c81f7647a9b466d7f"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 1
+    maxRetries: 1
     memory: "4 GB"
     disks: "local-disk 100 SSD"
   }
@@ -233,7 +247,8 @@ task cleanvcf1b {
   
   runtime {
     preemptible: 1
-    docker : "talkowski/sv-pipeline@sha256:956645f01f2d6ab22ce746029d49e8f9b38b8cdb8252151c81f7647a9b466d7f"
+    maxRetries: 1
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     disks: "local-disk 100 SSD"
     memory: "4 GB"
   }
@@ -249,23 +264,24 @@ task cleanvcf1b {
 
 task split {
 
-	File whitelist
+  File whitelist
   Int samples_per_step2_shard
 
   command {
-    	mkdir output;
+      mkdir output;
       split -l ${samples_per_step2_shard} ${whitelist} output/whiteblack.
   }
 
   runtime {
     preemptible: 1
-    docker : "talkowski/sv-pipeline@sha256:5f91adfa7ba0e59b7ac4f24c8b0ac3f0505366ea2022adb72827afe32af71dcf"
+    maxRetries: 1
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     disks: "local-disk 100 SSD"
     memory: "4 GB"
   }
 
   output {
-	 Array[File] whitelists=glob("output/*")
+   Array[File] whitelists=glob("output/*")
   }
 }
 
@@ -279,7 +295,7 @@ task cleanvcf3{
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:5f91adfa7ba0e59b7ac4f24c8b0ac3f0505366ea2022adb72827afe32af71dcf"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     disks: "local-disk 100 SSD"
     memory: "8 GB"
   }
@@ -292,7 +308,7 @@ task cleanvcf3{
 
 task cleanvcf5 {
 
-	File revise_vcf_lines
+  File revise_vcf_lines
   File normal_revise_vcf
   File famfile
   File sexchr_revise
@@ -310,9 +326,10 @@ task cleanvcf5 {
   }
 
   runtime {
-    docker : "talkowski/sv-pipeline@sha256:956645f01f2d6ab22ce746029d49e8f9b38b8cdb8252151c81f7647a9b466d7f"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     disks: "local-disk 100 SSD"
     memory: "8 GB"
+    maxRetries: 1
   }
   
   output {
@@ -337,8 +354,9 @@ task drop_redundant_CNVs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:5f91adfa7ba0e59b7ac4f24c8b0ac3f0505366ea2022adb72827afe32af71dcf"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 0
+    maxRetries: 1
     disks: "local-disk 100 SSD"
   }
 }
@@ -365,8 +383,9 @@ task stitch_fragmented_CNVs {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:5f91adfa7ba0e59b7ac4f24c8b0ac3f0505366ea2022adb72827afe32af71dcf"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 0
+    maxRetries: 1
     disks: "local-disk 100 SSD"
   }
 }
@@ -394,8 +413,9 @@ task final_cleanup {
   }
 
   runtime {
-    docker: "talkowski/sv-pipeline@sha256:5f91adfa7ba0e59b7ac4f24c8b0ac3f0505366ea2022adb72827afe32af71dcf"
+    docker: "talkowski/sv-pipeline@sha256:703a19f84f498989ba8ffde110a3462cfecfbd7ade1084a151fac5fff742c266"
     preemptible: 0
+    maxRetries: 1
     disks: "local-disk 100 SSD"
   }
 }
