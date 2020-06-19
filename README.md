@@ -5,13 +5,13 @@ Distributed under terms of the [MIT License](/LICENSE) (see `LICENSE`).
 
 ---  
 
-# IMPORTANT NOTE (PLEASE READ):  
+# IMPORTANT NOTE (PLEASE READ)  
 
 As of June 18, 2020, the SV discovery pipeline used for gnomAD-SV and described in [Collins\*, Brand\*, _et al._, _Nature_ (2020)](https://broad.io/gnomad_sv) has been refactored & extensively documented, and is now provided in a different repository.  
 
 Please refer to [the updated codebase here](https://github.com/broadinstitute/gatk-sv) if you are interested in running the SV discovery pipeline as applied to gnomAD-SV.  
 
-The code in this reposity will be preserved for archival purposes; however, please note that no active development is underway in this repository.  
+This old repository will be preserved for archival purposes; however, please note that no active development is underway.  
 
 Please report all issues, feature requests, etc. in [the new GATK-SV repo](https://github.com/broadinstitute/gatk-sv).  
 
