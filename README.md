@@ -1,15 +1,23 @@
 # gnomAD-SV codebase
 
-Copyright (c) 2019, [Ryan L. Collins](mailto:rlcollins@g.harvard.edu) and the Talkowski Laboratory.  
+Copyright (c) 2019-2020, [Ryan L. Collins](mailto:rlcollins@g.harvard.edu) and the Talkowski Laboratory.  
 Distributed under terms of the [MIT License](/LICENSE) (see `LICENSE`).  
 
-This repository contains custom code and scripts developed as described in the gnomAD-SV preprint, [Collins\*, Brand\*, et al., bioRxiv (2019)](https://broad.io/gnomad_sv).  
+---  
 
-For more information, please refer to [this blog post](https://macarthurlab.org/2019/03/20/structural-variants-in-gnomad/).  
+# IMPORTANT NOTE (PLEASE READ):  
+
+As of June 18, 2020, the SV discovery pipeline used for gnomAD-SV and described in [Collins\*, Brand\*, _et al._, _Nature_ (2020)](https://broad.io/gnomad_sv) has been refactored & extensively documented, and is now provided in a different repository.  
+
+Please refer to [the updated codebase here](https://github.com/broadinstitute/gatk-sv) if you are interested in running the SV discovery pipeline as applied to gnomAD-SV.  
+
+The code in this reposity will be preserved for archival purposes; however, please note that no active development is underway in this repository.  
+
+Please report all issues, feature requests, etc. in [the new GATK-SV repo](https://github.com/broadinstitute/gatk-sv).  
 
 ---
 
-# Structure of this repository
+## Structure of this repository
 
 The contents of this codebase are subdivided into several sections, for clarity.  
 
@@ -88,7 +96,7 @@ All code in this repository is released under the MIT license (see `LICENSE`).
 If you reuse the code hosted in this repo, or the SV data hosted on the gnomAD Browser, please cite [the gnomAD-SV preprint](https://broad.io/gnomad_sv).
 
 ### Citation
-[**An open resource of structural variation for medical and population genetics.**](https://broad.io/gnomad_sv) Ryan L. Collins, Harrison Brand, Konrad J. Karczewski, Xuefang Zhao, Jessica Alföldi, Amit V. Khera, Laurent C. Francioli, Laura D. Gauthier, Harold Wang, Nicholas A. Watts, Matthew Solomonson, Anne O’Donnell-Luria, Alexander Baumann, Ruchi Munshi, Chelsea Lowther, Mark Walker, Christopher Whelan, Yongqing Huang, Ted Brookings, Ted Sharpe, Matthew R. Stone, Elise Valkanas, Jack Fu, Grace Tiao, Kristen M. Laricchia, Christine Stevens, Namrata Gupta, Lauren Margolin, The Genome Aggregation Database (gnomAD) Production Team, The gnomAD Consortium, John A. Spertus, Kent D. Taylor, Henry J. Lin, Stephen S. Rich, Wendy Post, Yii,Der Ida Chen, Jerome I. Rotter, Chad Nusbaum, Anthony Philippakis, Eric Lander, Stacey Gabriel, Benjamin M. Neale, Sekar Kathiresan, Mark J. Daly, Eric Banks, Daniel G. MacArthur, Michael E. Talkowski. _bioRxiv_ (2019).
+[**A structural variation reference for medical and population genetics.**](https://broad.io/gnomad_sv) Ryan L. Collins, Harrison Brand, Konrad J. Karczewski, Xuefang Zhao, Jessica Alföldi, Laurent C. Francioli, Amit V. Khera, Chelsea Lowther, Laura D. Gauthier, Harold Wang, Nicholas A. Watts, Matthew Solomonson, Anne O’Donnell-Luria, Alexander Baumann, Ruchi Munshi, Mark Walker, Christopher W. Whelan, Yongqing Huang, Ted Brookings, Ted Sharpe, Matthew R. Stone, Elise Valkanas, Jack Fu, Grace Tiao, Kristen M. Laricchia, Valentin Ruano-Rubio, Christine Stevens, Namrata Gupta, Caroline Cusick, Lauren Margolin, Genome Aggregation Database Production Team, Genome Aggregation Database Consortium, Kent D. Taylor, Henry J. Lin, Stephen S. Rich, Wendy S. Post, Yii-Der Ida Chen, Jerome I. Rotter, Chad Nusbaum, Anthony Philippakis, Eric Lander, Stacey Gabriel, Benjamin M. Neale, Sekar Kathiresan, Mark J. Daly, Eric Banks, Daniel G. MacArthur & Michael E. Talkowski. _Nature_ (2020). DOI: [10.1038/s41586-020-2287-8](https://doi.org/10.1038/s41586-020-2287-8). PMID: [32461652](https://pubmed.ncbi.nlm.nih.gov/32461652/).  
 
 ### Credits
 Acknowledgements & credits for all members of the gnomAD consoritum and gnomAD production, analysis, and SV teams are [listed on the gnomAD website](https://gnomad.broadinstitute.org/about).   
